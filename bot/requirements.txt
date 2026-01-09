@@ -1,0 +1,16 @@
+# Core dependencies
+python-dotenv==1.0.0
+websockets==12.0
+
+# Polymarket CLOB client
+py-clob-client==0.25.0
+
+# Database
+# (sqlite3 is built into Python)
+
+# Testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+
+# Optional: for real WebSocket feeds
+# requests==2.31.0

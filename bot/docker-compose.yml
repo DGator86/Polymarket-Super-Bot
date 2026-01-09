@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  polymarket-bot:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: polymarket-bot
+    restart: unless-stopped
+
+    # Environment variables from .env file
+    env_file:
+      - .env
+
+    # Mount volumes for persistence
+    volumes:
+      # Database persistence
+      - ./data:/app/data
+      # Configuration files
+      - ./markets.json:/app/markets.json:ro
+      # Optional: mount .env for easy updates
+      - ./.env:/app/.env:ro
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # Health check (optional)
+    # healthcheck:
+    #   test: ["CMD", "python", "-c", "import sqlite3; conn = sqlite3.connect('/app/data/bot_state.db'); conn.close()"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
+
+    # Resource limits (optional - adjust based on needs)
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
