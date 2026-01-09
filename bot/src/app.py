@@ -29,6 +29,7 @@ from src.state.repositories import (
     DecisionRepository
 )
 from src.state.pnl import PnLTracker
+from src.utils.timing import now_us, Stopwatch, track_latency, print_latency_report
 
 logger = get_logger("app")
 
@@ -57,6 +58,8 @@ class PolymarketBot:
         self.db = None
         self.pnl_tracker = None
         self.running = False
+        self.iteration_count = 0
+        self.last_latency_report_ts = 0
 
     def initialize(self) -> None:
         """Initialize all components."""
@@ -212,21 +215,36 @@ class PolymarketBot:
             logger.error(f"Error during emergency shutdown: {e}", exc_info=True)
 
     def run_loop(self) -> None:
-        """Main bot loop."""
+        """Main bot loop with microsecond-precision latency tracking."""
         loop_interval_seconds = self.config.loop_interval_ms / 1000.0
+        latency_report_interval_us = 60_000_000  # Print report every 60 seconds
 
         while self.running:
             try:
-                loop_start = time.time()
+                # Start stopwatch for loop iteration
+                sw = Stopwatch()
+                sw.start()
 
                 # Run one iteration
                 self._run_iteration()
 
+                # Track loop iteration latency
+                iteration_latency = sw.elapsed_us()
+                track_latency('loop_iteration', iteration_latency)
+
+                # Print latency report periodically
+                now = now_us()
+                if now - self.last_latency_report_ts > latency_report_interval_us:
+                    print_latency_report()
+                    self.last_latency_report_ts = now
+
                 # Sleep for remainder of interval
-                elapsed = time.time() - loop_start
-                sleep_time = max(0, loop_interval_seconds - elapsed)
+                elapsed_seconds = iteration_latency / 1_000_000
+                sleep_time = max(0, loop_interval_seconds - elapsed_seconds)
                 if sleep_time > 0:
                     time.sleep(sleep_time)
+
+                self.iteration_count += 1
 
             except KeyboardInterrupt:
                 logger.info("Received interrupt signal, shutting down...")
@@ -236,12 +254,13 @@ class PolymarketBot:
                 time.sleep(1)  # Brief pause before retrying
 
     def _run_iteration(self) -> None:
-        """Run one iteration of the main loop."""
+        """Run one iteration of the main loop with latency tracking."""
         # Check kill switch
         if self.kill_switch.is_active():
             logger.warning("Kill switch active, skipping iteration")
             return
 
+        # Use microsecond timestamp
         current_ts = int(datetime.now().timestamp())
 
         # Get active markets
@@ -260,7 +279,9 @@ class PolymarketBot:
         # Get current open orders
         open_orders = self.order_repo.get_open_orders()
 
-        # Generate intents
+        # Generate intents with latency tracking
+        sw = Stopwatch()
+        sw.start()
         intents = self.hybrid_router.generate_all_intents(
             markets=markets,
             books=books,
@@ -268,21 +289,25 @@ class PolymarketBot:
             positions=positions,
             current_ts=current_ts
         )
+        track_latency('intent_generation', sw.elapsed_us())
 
         # Risk check and execute each intent
+        risk_check_latencies = []
         for intent in intents:
             try:
                 # Get current mid for risk check
                 book = books.get(intent.token_id)
                 current_mid = book.mid if book and book.mid else 0.5
 
-                # Risk check
+                # Risk check with latency tracking
+                sw.reset()
                 self.risk_engine.check_intent(
                     intent=intent,
                     positions=positions,
                     open_orders=open_orders,
                     current_mid=current_mid
                 )
+                risk_check_latencies.append(sw.elapsed_us())
 
                 # Log accepted decision
                 self.decision_repo.log_decision(intent, accepted=True)
@@ -293,10 +318,17 @@ class PolymarketBot:
                 self.decision_repo.log_decision(intent, accepted=False, rejection_reason=str(e))
                 continue
 
+        # Track average risk check latency
+        if risk_check_latencies:
+            avg_risk_latency = sum(risk_check_latencies) // len(risk_check_latencies)
+            track_latency('risk_check', avg_risk_latency)
+
         # Reconcile intents with open orders (place/cancel/replace)
         # Only pass intents that passed risk checks
         accepted_intents = [i for i in intents]  # TODO: filter only accepted
+        sw.reset()
         self.order_manager.reconcile(accepted_intents, open_orders)
+        track_latency('order_placement', sw.elapsed_us())
 
         # Log metrics
         current_mids = {token_id: book.mid for token_id, book in books.items() if book.mid}

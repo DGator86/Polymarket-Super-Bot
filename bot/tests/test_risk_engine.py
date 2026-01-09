@@ -46,7 +46,7 @@ def test_inventory_limit():
         price=0.52,
         size=20,
         mode=IntentMode.MAKER,
-        ttl_ms=3000,
+        ttl_us=3_000_000,
         reason="test"
     )
 
@@ -84,7 +84,7 @@ def test_inventory_limit_pass():
         price=0.52,
         size=5,
         mode=IntentMode.MAKER,
-        ttl_ms=3000,
+        ttl_us=3_000_000,
         reason="test"
     )
 
@@ -123,7 +123,7 @@ def test_notional_limit():
         price=0.80,
         size=100,
         mode=IntentMode.MAKER,
-        ttl_ms=3000,
+        ttl_us=3_000_000,
         reason="test"
     )
 
@@ -158,7 +158,7 @@ def test_order_limit():
         price=0.50,
         size=10,
         mode=IntentMode.MAKER,
-        ttl_ms=3000,
+        ttl_us=3_000_000,
         reason="test"
     )
 
@@ -190,7 +190,7 @@ def test_kill_switch():
         price=0.50,
         size=10,
         mode=IntentMode.MAKER,
-        ttl_ms=3000,
+        ttl_us=3_000_000,
         reason="test"
     )
 
@@ -219,7 +219,7 @@ def test_rate_limit():
         price=0.50,
         size=10,
         mode=IntentMode.MAKER,
-        ttl_ms=3000,
+        ttl_us=3_000_000,
         reason="test"
     )
 
