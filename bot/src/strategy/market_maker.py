@@ -38,6 +38,7 @@ class MarketMakerStrategy:
         self.half_spread = half_spread
         self.default_size = default_size
         self.quote_ttl_ms = quote_ttl_ms
+        self.quote_ttl_us = quote_ttl_ms * 1000  # Convert to microseconds
         self.inventory_skew_factor = inventory_skew_factor
         self.max_inventory = max_inventory
         logger.info(
@@ -102,7 +103,7 @@ class MarketMakerStrategy:
             price=bid_price,
             size=self.default_size,
             mode=IntentMode.MAKER,
-            ttl_ms=self.quote_ttl_ms,
+            ttl_us=self.quote_ttl_us,
             reason=f"mm_bid_pfair={p_fair:.4f}_skew={inventory_skew:.6f}"
         )
         intents.append(bid_intent)
@@ -114,7 +115,7 @@ class MarketMakerStrategy:
             price=ask_price,
             size=self.default_size,
             mode=IntentMode.MAKER,
-            ttl_ms=self.quote_ttl_ms,
+            ttl_us=self.quote_ttl_us,
             reason=f"mm_ask_pfair={p_fair:.4f}_skew={inventory_skew:.6f}"
         )
         intents.append(ask_intent)

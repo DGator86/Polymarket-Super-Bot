@@ -27,6 +27,10 @@ Feeds → Strategy → Intents → Risk → Execution → State
 ✅ **Risk Controls**: Position limits, notional limits, rate limits, daily loss limits
 ✅ **Kill Switch**: Emergency shutdown with order cancellation
 ✅ **PnL Tracking**: Real-time realized and unrealized PnL
+✅ **Interactive CLI**: Manual control and inspection via command menu
+✅ **Balance Checker**: Real-time USDC/MATIC balance verification
+✅ **Allowance Manager**: Token approval tracking and management
+✅ **Dual Modes**: Automated trading or interactive manual control
 ✅ **Dry-Run Mode**: Test without real money
 ✅ **Structured Logging**: Comprehensive logging with configurable levels
 ✅ **State Persistence**: SQLite database for all trading activity
@@ -108,12 +112,32 @@ Edit `markets.json` to define markets to trade:
 
 ## Running the Bot
 
-### Dry-Run Mode (Recommended First)
+The bot supports **two modes**:
+1. **Automated Mode**: Fully automated trading with hybrid A+B strategy
+2. **Interactive Mode**: Manual control via command-line interface
+
+### Quick Start with Launcher
+
+```bash
+# Automated mode (default)
+python run.py
+
+# Interactive CLI mode
+python run.py --interactive
+# or
+python run.py --mode interactive
+```
+
+### Automated Mode (Continuous Trading)
+
+**Dry-Run Mode (Recommended First)**
 
 Test without real money:
 
 ```bash
 # Ensure DRY_RUN=1 in .env
+python run.py
+# or
 python -m src.app
 ```
 
@@ -122,9 +146,9 @@ The bot will:
 - NOT place real orders
 - Use simulated orderbook data
 
-### Live Trading
+**Live Trading**
 
-**⚠️ WARNING: Live trading uses real money!**
+⚠️ **WARNING: Live trading uses real money!**
 
 1. Verify configuration:
    - Set `DRY_RUN=0` in `.env`
@@ -139,13 +163,38 @@ The bot will:
 
 3. Run the bot:
    ```bash
-   python -m src.app
+   python run.py
    ```
 
 4. Monitor logs carefully:
    ```bash
    tail -f bot.log  # if LOG_FILE is set
    ```
+
+### Interactive Mode (Manual Control)
+
+The interactive CLI provides a menu-driven interface for manual operations:
+
+```bash
+python run.py --interactive
+```
+
+**Available Commands:**
+- **Check Balances**: View USDC and MATIC wallet balances
+- **Check Allowances**: View and set token approvals
+- **View Positions**: See current open positions
+- **View Open Orders**: List active orders
+- **View PnL**: Display profit/loss summary
+- **List Markets**: Show available markets
+- **View Market Details**: Get info about specific markets
+- **Place Order**: Manual order placement
+- **Cancel Order**: Cancel specific orders
+
+Interactive mode is perfect for:
+- Checking balances before starting automated trading
+- Manually managing positions
+- Inspecting bot state and activity
+- Learning the system without automated trading
 
 ## Testing
 
@@ -218,6 +267,8 @@ bot/
 │   ├── models.py              # Data models
 │   ├── config.py              # Configuration loader
 │   ├── market_registry.py     # Market definitions
+│   ├── cli.py                 # Interactive CLI
+│   ├── app.py                 # Main orchestrator (automated)
 │   ├── feeds/
 │   │   ├── polymarket_ws.py   # Orderbook WebSocket
 │   │   └── spot_ws.py         # Spot price WebSocket
@@ -234,15 +285,18 @@ bot/
 │   │   ├── clob_client.py     # CLOB API wrapper
 │   │   ├── order_manager.py   # Order reconciliation
 │   │   └── rate_limiter.py    # Rate limiting
-│   ├── state/
-│   │   ├── db.py              # Database initialization
-│   │   ├── repositories.py    # Data repositories
-│   │   └── pnl.py             # PnL tracking
-│   └── app.py                 # Main orchestrator
+│   ├── utils/
+│   │   ├── balance_checker.py # USDC/MATIC balance checker
+│   │   └── allowance_manager.py # Token approval manager
+│   └── state/
+│       ├── db.py              # Database initialization
+│       ├── repositories.py    # Data repositories
+│       └── pnl.py             # PnL tracking
 ├── tests/
 │   ├── test_fair_price.py
 │   ├── test_inventory_skew.py
 │   └── test_risk_engine.py
+├── run.py                     # Launcher (automated or interactive)
 ├── markets.json               # Market registry
 ├── requirements.txt
 ├── .env.example

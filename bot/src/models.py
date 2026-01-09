@@ -1,10 +1,13 @@
 """
 Core data models for the Polymarket hybrid bot.
+
+All timestamps use MICROSECONDS (not milliseconds) for high-frequency trading.
 """
 from dataclasses import dataclass, field
 from typing import Optional, Literal
 from datetime import datetime
 from enum import Enum
+from src.utils.timing import now_us
 
 
 class Side(str, Enum):
@@ -44,7 +47,7 @@ class BookTop:
     bid_sz: Optional[float]
     ask_px: Optional[float]
     ask_sz: Optional[float]
-    ts: int  # Unix timestamp in milliseconds
+    ts: int  # Unix timestamp in MICROSECONDS (not milliseconds!)
 
     @property
     def mid(self) -> Optional[float]:
@@ -63,8 +66,19 @@ class BookTop:
     @property
     def is_stale(self) -> bool:
         """Check if book data is stale (>2s old)."""
-        now_ms = int(datetime.now().timestamp() * 1000)
-        return (now_ms - self.ts) > 2000
+        now_microseconds = now_us()
+        stale_threshold_us = 2_000_000  # 2 seconds in microseconds
+        return (now_microseconds - self.ts) > stale_threshold_us
+
+    @property
+    def age_us(self) -> int:
+        """Age of book data in microseconds."""
+        return now_us() - self.ts
+
+    @property
+    def age_ms(self) -> int:
+        """Age of book data in milliseconds."""
+        return (now_us() - self.ts) // 1000
 
 
 @dataclass
@@ -75,13 +89,19 @@ class RefPrice:
     r_1s: float  # 1-second return
     r_5s: float  # 5-second return
     vol_30s: float  # 30-second rolling volatility
-    ts: int  # Unix timestamp in milliseconds
+    ts: int  # Unix timestamp in MICROSECONDS
 
     @property
     def is_stale(self) -> bool:
         """Check if reference price is stale (>2s old)."""
-        now_ms = int(datetime.now().timestamp() * 1000)
-        return (now_ms - self.ts) > 2000
+        now_microseconds = now_us()
+        stale_threshold_us = 2_000_000  # 2 seconds
+        return (now_microseconds - self.ts) > stale_threshold_us
+
+    @property
+    def age_us(self) -> int:
+        """Age in microseconds."""
+        return now_us() - self.ts
 
 
 @dataclass
@@ -113,7 +133,7 @@ class OpenOrder:
     price: float
     size: float
     filled_size: float = 0.0
-    ts: int = field(default_factory=lambda: int(datetime.now().timestamp() * 1000))
+    ts: int = field(default_factory=now_us)  # MICROSECONDS
 
     @property
     def remaining_size(self) -> float:
@@ -121,10 +141,14 @@ class OpenOrder:
         return self.size - self.filled_size
 
     @property
+    def age_us(self) -> int:
+        """Age of order in microseconds."""
+        return now_us() - self.ts
+
+    @property
     def age_ms(self) -> int:
         """Age of order in milliseconds."""
-        now_ms = int(datetime.now().timestamp() * 1000)
-        return now_ms - self.ts
+        return self.age_us // 1000
 
 
 @dataclass
@@ -135,9 +159,9 @@ class Intent:
     price: float
     size: float
     mode: IntentMode
-    ttl_ms: int  # Time to live in milliseconds
+    ttl_us: int  # Time to live in MICROSECONDS
     reason: str  # Why this intent was created (for logging)
-    created_ts: int = field(default_factory=lambda: int(datetime.now().timestamp() * 1000))
+    created_ts: int = field(default_factory=now_us)  # MICROSECONDS
 
     def __post_init__(self):
         if self.size <= 0:
@@ -148,8 +172,12 @@ class Intent:
     @property
     def is_expired(self) -> bool:
         """Check if intent has exceeded TTL."""
-        now_ms = int(datetime.now().timestamp() * 1000)
-        return (now_ms - self.created_ts) > self.ttl_ms
+        return (now_us() - self.created_ts) > self.ttl_us
+
+    @property
+    def age_us(self) -> int:
+        """Age in microseconds."""
+        return now_us() - self.created_ts
 
 
 @dataclass

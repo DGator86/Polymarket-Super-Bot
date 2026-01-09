@@ -139,7 +139,7 @@ class LagArbStrategy:
             price=price,
             size=size,
             mode=IntentMode.TAKER,
-            ttl_ms=1000,  # Taker orders are short-lived
+            ttl_us=1_000_000,  # Taker orders are short-lived (1 second in microseconds)
             reason=reason
         )
 

@@ -1,18 +1,19 @@
 """
-Rate limiter for API calls.
+Rate limiter for API calls with microsecond precision.
 """
 import threading
 import time
 from collections import deque
 from typing import Optional
 from src.logging_setup import get_logger
+from src.utils.timing import now_us
 
 logger = get_logger("rate_limiter")
 
 
 class RateLimiter:
     """
-    Token bucket rate limiter.
+    Token bucket rate limiter with microsecond precision.
 
     Enforces maximum requests per time window.
     Thread-safe.
@@ -28,9 +29,10 @@ class RateLimiter:
         """
         self.max_requests = max_requests
         self.window_seconds = window_seconds
-        self._timestamps: deque = deque()
+        self.window_us = int(window_seconds * 1_000_000)  # Convert to microseconds
+        self._timestamps: deque = deque()  # Store microsecond timestamps
         self._lock = threading.RLock()
-        logger.info(f"Rate limiter initialized: {max_requests} requests per {window_seconds}s")
+        logger.info(f"Rate limiter initialized: {max_requests} requests per {window_seconds}s ({self.window_us}µs)")
 
     def acquire(self, blocking: bool = True, timeout: Optional[float] = None) -> bool:
         """
@@ -38,19 +40,20 @@ class RateLimiter:
 
         Args:
             blocking: If True, wait until permission granted
-            timeout: Maximum time to wait (None = infinite)
+            timeout: Maximum time to wait in seconds (None = infinite)
 
         Returns:
             True if permission granted, False if denied (non-blocking only)
         """
-        start_time = time.time()
+        start_time_us = now_us()
+        timeout_us = int(timeout * 1_000_000) if timeout is not None else None
 
         while True:
             with self._lock:
-                now = time.time()
-                cutoff = now - self.window_seconds
+                now = now_us()
+                cutoff = now - self.window_us
 
-                # Remove old timestamps
+                # Remove old timestamps (outside window)
                 while self._timestamps and self._timestamps[0] < cutoff:
                     self._timestamps.popleft()
 
@@ -64,20 +67,20 @@ class RateLimiter:
                 return False
 
             # If timeout exceeded, return False
-            if timeout is not None and (time.time() - start_time) >= timeout:
+            if timeout_us is not None and (now_us() - start_time_us) >= timeout_us:
                 logger.warning("Rate limiter timeout exceeded")
                 return False
 
-            # Wait a bit before retrying
+            # Wait a bit before retrying (10ms)
             time.sleep(0.01)
 
     def get_available_requests(self) -> int:
         """Get number of available requests in current window."""
         with self._lock:
-            now = time.time()
-            cutoff = now - self.window_seconds
+            now = now_us()
+            cutoff = now - self.window_us
 
-            # Remove old timestamps
+            # Remove old timestamps (outside window)
             while self._timestamps and self._timestamps[0] < cutoff:
                 self._timestamps.popleft()
 
