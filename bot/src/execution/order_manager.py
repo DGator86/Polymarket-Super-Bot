@@ -1,9 +1,8 @@
 """
 Order manager - reconciles intents with open orders.
 """
-from typing import List, Dict, Optional
-from datetime import datetime
-from src.models import Intent, OpenOrder, Side, IntentMode
+from typing import List, Dict, Optional, Tuple
+from src.models import Intent, OpenOrder, IntentMode
 from src.execution.clob_client import CLOBClient
 from src.logging_setup import get_logger
 
@@ -46,7 +45,7 @@ class OrderManager:
         self,
         intents: List[Intent],
         open_orders: List[OpenOrder]
-    ) -> Dict[str, str]:
+    ) -> Tuple[List[Tuple[OpenOrder, str]], List[str]]:
         """
         Reconcile intents with open orders.
 
@@ -55,9 +54,10 @@ class OrderManager:
             open_orders: Current open orders
 
         Returns:
-            Dict mapping intent to order_id for newly placed orders
+            Tuple of placed orders (with reasons) and cancelled order IDs
         """
-        placed_orders = {}
+        placed_orders: List[Tuple[OpenOrder, str]] = []
+        cancelled_orders: List[str] = []
 
         # Build lookup of open orders by (token_id, side)
         open_by_token_side = {}
@@ -74,9 +74,9 @@ class OrderManager:
 
             # Handle taker intents (always place immediately)
             if intent.mode == IntentMode.TAKER:
-                order_id = self._place_taker_order(intent)
-                if order_id:
-                    placed_orders[f"{intent.token_id}_{intent.side.value}"] = order_id
+                order = self._place_taker_order(intent)
+                if order:
+                    placed_orders.append((order, intent.reason))
                 continue
 
             # Handle maker intents
@@ -97,22 +97,24 @@ class OrderManager:
             if not matched:
                 # Cancel any non-matching orders first
                 for order in matching_orders:
-                    self._cancel_order(order)
+                    if self._cancel_order(order):
+                        cancelled_orders.append(order.order_id)
                     matching_orders.remove(order)
 
                 # Place new order
-                order_id = self._place_maker_order(intent)
-                if order_id:
-                    placed_orders[f"{intent.token_id}_{intent.side.value}"] = order_id
+                order = self._place_maker_order(intent)
+                if order:
+                    placed_orders.append((order, intent.reason))
 
         # Cancel any remaining open orders that don't match intents
         intent_keys = set((i.token_id, i.side) for i in intents)
         for (token_id, side), orders in open_by_token_side.items():
             if (token_id, side) not in intent_keys:
                 for order in orders:
-                    self._cancel_order(order)
+                    if self._cancel_order(order):
+                        cancelled_orders.append(order.order_id)
 
-        return placed_orders
+        return placed_orders, cancelled_orders
 
     def _is_order_matching(self, order: OpenOrder, intent: Intent) -> bool:
         """
@@ -153,7 +155,7 @@ class OrderManager:
 
         return True
 
-    def _place_maker_order(self, intent: Intent) -> Optional[str]:
+    def _place_maker_order(self, intent: Intent) -> Optional[OpenOrder]:
         """
         Place a maker order.
 
@@ -169,9 +171,19 @@ class OrderManager:
         )
 
         order_id = self.clob_client.place_order(intent, post_only=True)
-        return order_id
+        if not order_id:
+            return None
+        return OpenOrder(
+            order_id=order_id,
+            token_id=intent.token_id,
+            side=intent.side,
+            price=intent.price,
+            size=intent.size,
+            filled_size=0.0,
+            ts=intent.created_ts
+        )
 
-    def _place_taker_order(self, intent: Intent) -> Optional[str]:
+    def _place_taker_order(self, intent: Intent) -> Optional[OpenOrder]:
         """
         Place a taker order.
 
@@ -187,7 +199,17 @@ class OrderManager:
         )
 
         order_id = self.clob_client.place_order(intent, post_only=False)
-        return order_id
+        if not order_id:
+            return None
+        return OpenOrder(
+            order_id=order_id,
+            token_id=intent.token_id,
+            side=intent.side,
+            price=intent.price,
+            size=intent.size,
+            filled_size=0.0,
+            ts=intent.created_ts
+        )
 
     def _cancel_order(self, order: OpenOrder) -> bool:
         """

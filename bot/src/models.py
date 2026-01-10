@@ -175,6 +175,16 @@ class Intent:
         return (now_us() - self.created_ts) > self.ttl_us
 
     @property
+    def ttl_ms(self) -> int:
+        """TTL in milliseconds."""
+        return self.ttl_us // 1000
+
+    @property
+    def created_ts_ms(self) -> int:
+        """Created timestamp in milliseconds."""
+        return self.created_ts // 1000
+
+    @property
     def age_us(self) -> int:
         """Age in microseconds."""
         return now_us() - self.created_ts
