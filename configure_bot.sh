@@ -122,9 +122,10 @@ EOF
 echo "✓ Configuration file created"
 echo ""
 
-# Set proper permissions
-chmod 600 .env
-echo "[3/3] Set secure file permissions (600)"
+# Set proper permissions (644 so Docker container can read it)
+chmod 644 .env
+chown 1000:1000 .env 2>/dev/null || true
+echo "[3/3] Set file permissions (readable by container)"
 echo ""
 
 echo "========================================="
