@@ -59,6 +59,7 @@ class PolymarketBot:
         self.order_manager = None
         self.db = None
         self.pnl_tracker = None
+        self.risk_limits = None
         self.running = False
         self.iteration_count = 0
         self.last_latency_report_ts = 0
@@ -163,6 +164,7 @@ class PolymarketBot:
         )
 
         self.risk_engine = RiskEngine(risk_limits, self.kill_switch)
+        self.risk_limits = risk_limits
 
         # Initialize CLOB client
         self.clob_client = CLOBClient(
@@ -295,6 +297,17 @@ class PolymarketBot:
         books = self.book_feed.get_all_books()
         ref_prices = self.spot_feed.get_all_prices()
 
+        fresh_books = {
+            token_id: book
+            for token_id, book in books.items()
+            if book.age_ms <= self.risk_limits.feed_stale_ms
+        }
+        fresh_ref_prices = {
+            symbol: ref_price
+            for symbol, ref_price in ref_prices.items()
+            if (ref_price.age_us // 1000) <= self.risk_limits.feed_stale_ms
+        }
+
         # Get current positions
         positions = self.pnl_tracker.get_all_positions()
 
@@ -306,8 +319,8 @@ class PolymarketBot:
         sw.start()
         intents = self.hybrid_router.generate_all_intents(
             markets=markets,
-            books=books,
-            ref_prices=ref_prices,
+            books=fresh_books,
+            ref_prices=fresh_ref_prices,
             positions=positions,
             current_ts=current_ts
         )
@@ -315,10 +328,11 @@ class PolymarketBot:
 
         # Risk check and execute each intent
         risk_check_latencies = []
+        accepted_intents = []
         for intent in intents:
             try:
                 # Get current mid for risk check
-                book = books.get(intent.token_id)
+                book = fresh_books.get(intent.token_id)
                 current_mid = book.mid if book and book.mid else 0.5
 
                 # Risk check with latency tracking
@@ -333,6 +347,7 @@ class PolymarketBot:
 
                 # Log accepted decision
                 self.decision_repo.log_decision(intent, accepted=True)
+                accepted_intents.append(intent)
 
             except Exception as e:
                 # Risk check failed
@@ -347,13 +362,17 @@ class PolymarketBot:
 
         # Reconcile intents with open orders (place/cancel/replace)
         # Only pass intents that passed risk checks
-        accepted_intents = [i for i in intents]  # TODO: filter only accepted
         sw.reset()
-        self.order_manager.reconcile(accepted_intents, open_orders)
+        placed_orders, cancelled_orders = self.order_manager.reconcile(accepted_intents, open_orders)
+        for order, reason in placed_orders:
+            self.order_repo.save_order(order, reason=reason)
+            self.risk_engine.record_order()
+        for order_id in cancelled_orders:
+            self.order_repo.update_order_status(order_id, "CANCELLED")
         track_latency('order_placement', sw.elapsed_us())
 
         # Log metrics
-        current_mids = {token_id: book.mid for token_id, book in books.items() if book.mid}
+        current_mids = {token_id: book.mid for token_id, book in fresh_books.items() if book.mid}
         pnl = self.pnl_tracker.calculate_total_pnl(current_mids)
         metrics = self.risk_engine.get_metrics(positions, open_orders, current_mids)
 

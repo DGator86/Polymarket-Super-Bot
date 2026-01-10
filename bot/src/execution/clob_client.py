@@ -124,7 +124,7 @@ class CLOBClient:
                 size=intent.size,
                 side=intent.side.value,
                 order_type=order_type,
-                expiration=intent.created_ts + intent.ttl_ms  # Expiration timestamp
+                expiration=intent.created_ts_ms + intent.ttl_ms  # Expiration timestamp
             )
 
             # Place order
