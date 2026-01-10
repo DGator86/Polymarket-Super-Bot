@@ -113,10 +113,11 @@ class PolymarketBookFeed:
                     logger.info("Connected to Polymarket WebSocket")
                     retry_delay = 1  # Reset retry delay on successful connection
 
-                    # Send subscription messages for all tokens
+                    # Batch subscription
                     with self._lock:
-                        for token_id in self._subscribed_tokens:
-                            await self._send_subscribe(ws, token_id)
+                        tokens = list(self._subscribed_tokens)
+                        if tokens:
+                            await self._send_subscribe_batch(ws, tokens)
 
                     # Consume messages
                     async for message in ws:
@@ -134,37 +135,67 @@ class PolymarketBookFeed:
                 await asyncio.sleep(retry_delay)
                 retry_delay = min(retry_delay * 2, max_retry_delay)
 
-    async def _send_subscribe(self, ws, token_id: str) -> None:
-        """Send subscription message for a token."""
+    async def _send_subscribe_batch(self, ws, token_ids: list[str]) -> None:
+        """
+        Send batched subscription message.
+        """
+        # CLOB websocket supports subscribing to multiple assets in one message
         message = {
-            "type": "subscribe",
-            "channel": "book",
-            "market": token_id
+            "assets_ids": token_ids,
+            "type": "market"
         }
         await ws.send(json.dumps(message))
+        logger.info(f"Sent batch subscription for {len(token_ids)} tokens")
+
+    async def _send_subscribe(self, ws, token_id: str) -> None:
+        """Deprecated: Use _send_subscribe_batch instead."""
+        await self._send_subscribe_batch(ws, [token_id])
 
     async def _handle_message(self, message: str) -> None:
         """Handle incoming WebSocket message."""
         try:
             data = json.loads(message)
 
-            # Handle different message types
-            msg_type = data.get("type")
-            if msg_type == "book":
-                await self._handle_book_update(data)
-            elif msg_type == "subscribed":
-                logger.debug(f"Subscribed to {data.get('market')}")
-            elif msg_type == "error":
-                logger.error(f"WebSocket error message: {data}")
+            # Handle list of messages
+            if isinstance(data, list):
+                for item in data:
+                    await self._process_single_message(item)
+            else:
+                await self._process_single_message(data)
 
         except json.JSONDecodeError:
             logger.warning(f"Failed to decode message: {message}")
         except Exception as e:
             logger.error(f"Error handling message: {e}", exc_info=True)
 
+    async def _process_single_message(self, data: dict) -> None:
+        """Process a single message object."""
+        if not isinstance(data, dict):
+            return
+
+        # Handle different message types
+        # Log the first few messages to debug structure
+        # logger.info(f"Received message type: {data.get('event_type') or data.get('type')}")
+        
+        # CLOB often uses 'event_type' or just 'type'
+        msg_type = data.get("event_type") or data.get("type")
+        
+        if msg_type == "book":
+            await self._handle_book_update(data)
+        elif msg_type == "market": 
+            # CLOB sometimes sends type='market' with data inside
+            await self._handle_book_update(data)
+        elif msg_type == "subscribed":
+            logger.debug(f"Subscribed to {data.get('market')}")
+        elif msg_type == "error":
+            logger.error(f"WebSocket error message: {data}")
+
     async def _handle_book_update(self, data: dict) -> None:
         """Handle orderbook update message."""
-        token_id = data.get("market")
+        # CLOB structure: {"asset_id": "...", "bids": [], "asks": []}
+        # Or sometimes {"market": "..."} depending on endpoint version
+        
+        token_id = data.get("asset_id") or data.get("market")
         if not token_id:
             return
 
@@ -173,6 +204,10 @@ class PolymarketBookFeed:
         # Parse bids and asks
         bids = data.get("bids", [])
         asks = data.get("asks", [])
+
+        # If data is empty, ignore
+        if not bids and not asks:
+            return
 
         bid_px = float(bids[0]["price"]) if bids else None
         bid_sz = float(bids[0]["size"]) if bids else None
@@ -190,6 +225,9 @@ class PolymarketBookFeed:
 
         with self._lock:
             self._books[token_id] = book
+            # Log first book update for confirmation
+            if len(self._books) == 1: 
+                logger.info(f"First book update received for {token_id}: {bid_px}/{ask_px}")
 
         logger.debug(f"Book update for {token_id}: bid={bid_px}@{bid_sz}, ask={ask_px}@{ask_sz}")
 

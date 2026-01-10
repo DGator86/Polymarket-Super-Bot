@@ -15,7 +15,9 @@ from src.feeds.spot_ws import SpotPriceFeed, SimulatedSpotFeed, BinanceSpotFeed
 from src.strategy.fair_price import FairPriceCalculator
 from src.strategy.lag_arb import LagArbStrategy
 from src.strategy.market_maker import MarketMakerStrategy
-from src.strategy.hybrid_router import HybridRouter
+from src.strategy.smart_router import SmartRouter  # Updated to use SmartRouter
+from src.strategy.toxicity import ToxicityDetector
+from src.strategy.fee_model import FeeModel
 from src.risk.limits import RiskLimits
 from src.risk.kill_switch import KillSwitch
 from src.risk.risk_engine import RiskEngine
@@ -94,9 +96,11 @@ class PolymarketBot:
         self.registry = MarketRegistry(self.config.market_registry_path)
 
         # Initialize feeds
-        # For now, use simulated feeds - replace with real ones in production
-        self.book_feed = SimulatedBookFeed()
-        self.spot_feed = SimulatedSpotFeed()
+        # Use real feeds for production/live data
+        self.book_feed = PolymarketBookFeed()
+        
+        # Spot feed: use Binance for Crypto, empty/simulated for sports (routers will fallback)
+        self.spot_feed = BinanceSpotFeed(symbols=["BTCUSDT", "ETHUSDT", "SOLUSDT"])
 
         # Subscribe to markets
         markets = self.registry.get_all_markets()
@@ -123,10 +127,28 @@ class PolymarketBot:
             max_inventory=self.config.risk.max_inventory_per_token
         )
 
-        self.hybrid_router = HybridRouter(
+        # Initialize Smart Survival components
+        toxicity_detector = ToxicityDetector(
+            vol_threshold=0.02,
+            spread_threshold=0.05
+        )
+        
+        # Fee Model with .env params if available, else defaults
+        base_taker_fee = float(self.config.execution.get("BASE_TAKER_FEE", 0.02)) # Default 2%
+        maker_rebate = float(self.config.execution.get("MAKER_REBATE", 0.002)) # Default 0.2%
+        
+        fee_model = FeeModel(
+            gas_cost_usd=0.01,
+            base_taker_fee=base_taker_fee,
+            maker_rebate=maker_rebate
+        )
+
+        self.hybrid_router = SmartRouter(
             fair_price_calc=fair_price_calc,
             lag_arb=lag_arb,
-            market_maker=market_maker
+            market_maker=market_maker,
+            toxicity_detector=toxicity_detector,
+            fee_model=fee_model
         )
 
         # Initialize risk engine

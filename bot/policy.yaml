@@ -1,0 +1,85 @@
+version: 1
+
+runtime:
+  dry_run: false
+  loop_hz_target: 5
+  use_websocket_state: true
+  websocket:
+    url: "wss://ws-subscriptions-clob.polymarket.com/ws/"
+    channels:
+      - market
+      - user
+  rate_limit:
+    max_rest_rps: 2
+    backoff_on_429_secs: 5
+    max_ws_staleness_ms: 1500
+
+capital:
+  account_usdc: 60.0
+  reserve_usdc: 6.0
+  max_daily_loss_usdc: 8.0
+  kill_switch:
+    on_trigger:
+      cancel_all_orders: true
+      flatten_positions: true
+      shutdown_trading: true
+
+universe:
+  enable_rolling15: true
+  rolling15_assets: [BTC, ETH, SOL, XRP]
+  
+  enable_all_binary: true
+  all_binary_scan:
+    min_volume_24h: 5000
+    min_liquidity: 50
+
+risk:
+  exposure:
+    rolling15:
+      max_usdc_per_market: 12.0
+      max_live_markets: 3
+    default_binary:
+      max_usdc_per_market: 8.0
+      max_live_markets: 8
+  inventory:
+    max_net_contracts_per_market: 30
+    skew:
+      enabled: true
+      skew_strength_cents_per_contract: 0.05
+
+microstructure_gates:
+  toxicity:
+    spread_jump_cents: 3
+    mid_move_cents_in_2s: 4
+  regimes:
+    calm:
+      quote: true
+      half_spread_cents: 1
+    normal:
+      quote: true
+      half_spread_cents: 2
+    toxic:
+      quote: true
+      half_spread_cents: 6
+    panic:
+      quote: false
+
+strategies:
+  - name: parity_arb
+    priority: 100
+    triggers:
+      min_edge_cents_default: 2
+      min_edge_cents_rolling15: 5
+
+  - name: maker_market_make
+    priority: 50
+    quoting:
+      size:
+        rolling15_contracts: 6
+        default_binary_contracts: 4
+
+  - name: taker_snipe
+    priority: 10
+    triggers:
+      min_dislocation_cents_rolling15: 8
+      min_dislocation_cents_default: 4

@@ -40,7 +40,14 @@ class ExecutionConfig:
     api_passphrase: Optional[str]
     chain_id: int
     clob_url: str
+    # Flexible dict for additional params
+    _extra: dict = None
 
+    def get(self, key, default=None):
+        """Get extra parameter."""
+        if self._extra and key in self._extra:
+            return self._extra[key]
+        return default
 
 @dataclass
 class Config:
@@ -116,6 +123,13 @@ def load_config() -> Config:
 
     # Execution config
     dry_run = get_bool("DRY_RUN", default=True)
+    
+    # Store extra Fee params
+    extra_params = {
+        "BASE_TAKER_FEE": get_float("BASE_TAKER_FEE", required=False, default=0.02),
+        "MAKER_REBATE": get_float("MAKER_REBATE", required=False, default=0.002)
+    }
+    
     execution = ExecutionConfig(
         dry_run=dry_run,
         private_key=get_env("PRIVATE_KEY", required=not dry_run, default=""),
@@ -123,7 +137,8 @@ def load_config() -> Config:
         api_secret=get_env("API_SECRET", required=False),
         api_passphrase=get_env("API_PASSPHRASE", required=False),
         chain_id=get_int("CHAIN_ID", default=137),
-        clob_url=get_env("CLOB_URL", default="https://clob.polymarket.com")
+        clob_url=get_env("CLOB_URL", default="https://clob.polymarket.com"),
+        _extra=extra_params
     )
 
     # General config
