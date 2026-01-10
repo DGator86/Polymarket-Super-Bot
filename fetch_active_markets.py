@@ -48,6 +48,11 @@ def filter_markets(markets, min_volume=10000, max_days_until_expiry=60):
     for market in markets:
         # Skip if no volume data
         volume = market.get("volume", 0) or market.get("volume24hr", 0)
+        try:
+            volume = float(volume) if volume else 0
+        except (ValueError, TypeError):
+            volume = 0
+
         if volume < min_volume:
             continue
 
@@ -144,6 +149,10 @@ def convert_to_bot_format(markets):
 
         # Get volume
         volume = market.get("volume", 0) or market.get("volume24hr", 0) or 0
+        try:
+            volume = float(volume) if volume else 0.0
+        except (ValueError, TypeError):
+            volume = 0.0
 
         bot_market = {
             "slug": market.get("slug", ""),
@@ -155,7 +164,7 @@ def convert_to_bot_format(markets):
             "tick_size": 0.01,
             "min_size": 1.0,
             "condition_id": condition_id,
-            "volume": float(volume)
+            "volume": volume
         }
 
         bot_markets.append(bot_market)
