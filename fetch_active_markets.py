@@ -26,6 +26,7 @@ def fetch_polymarket_markets(limit=200):
 
     params = {
         "limit": limit,
+        "closed": "false",  # Only open markets
         "active": "true",
         "_sort": "volume24hr",
         "_order": "desc"
@@ -46,6 +47,14 @@ def filter_markets(markets, min_volume=10000, max_days_until_expiry=60):
     max_expiry = now + (max_days_until_expiry * 24 * 60 * 60)
 
     for market in markets:
+        # Skip closed markets
+        if market.get("closed") or market.get("closed") == "true":
+            continue
+
+        # Skip if market explicitly marked as inactive
+        if market.get("active") == False or market.get("active") == "false":
+            continue
+
         # Skip if no volume data
         volume = market.get("volume", 0) or market.get("volume24hr", 0)
         try:
@@ -56,8 +65,8 @@ def filter_markets(markets, min_volume=10000, max_days_until_expiry=60):
         if volume < min_volume:
             continue
 
-        # Check expiry
-        end_date = market.get("endDate") or market.get("end_date_iso")
+        # Check expiry - skip expired markets
+        end_date = market.get("endDate") or market.get("end_date_iso") or market.get("endDate")
         if end_date:
             try:
                 # Try parsing ISO format
@@ -70,6 +79,7 @@ def filter_markets(markets, min_volume=10000, max_days_until_expiry=60):
                 if expiry < now or expiry > max_expiry:
                     continue
             except:
+                # If we can't parse the date, skip markets without clear expiry
                 pass
 
         # Check if market matches our categories
@@ -211,9 +221,9 @@ def main():
     print(f"Fetched {len(all_markets)} total markets")
 
     # Filter for relevant markets
-    print("Filtering for high-volume, short-term markets in target categories...")
-    filtered = filter_markets(all_markets, min_volume=5000, max_days_until_expiry=90)
-    print(f"Found {len(filtered)} relevant markets")
+    print("Filtering for active markets in target categories...")
+    filtered = filter_markets(all_markets, min_volume=1000, max_days_until_expiry=120)
+    print(f"Found {len(filtered)} relevant markets after filtering")
 
     if not filtered:
         print("ERROR: No markets found matching criteria!")
