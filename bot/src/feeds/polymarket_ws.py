@@ -3,8 +3,10 @@ Polymarket WebSocket feed for orderbook data.
 """
 import asyncio
 import threading
+import time
 from typing import Dict, Optional, Set
 from datetime import datetime
+import requests
 import websockets
 import json
 from src.models import BookTop
@@ -22,6 +24,9 @@ class PolymarketBookFeed:
     def __init__(self, ws_url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"):
         self.ws_url = ws_url
         self._books: Dict[str, BookTop] = {}
+        self._l2_books: Dict[str, Dict[str, Dict[float, float]]] = {}
+        self._last_rest_fetch: Dict[str, float] = {}
+        self._rest_fetch_interval_s = 0.5
         self._lock = threading.RLock()
         self._subscribed_tokens: Set[str] = set()
         self._running = False
