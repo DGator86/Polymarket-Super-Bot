@@ -45,6 +45,10 @@ def filter_short_term_markets(markets, min_volume=5000, min_days=1, max_days=30)
         if not market.get("enableOrderBook"):
             continue
 
+        # Skip negRisk markets (they use different trading mechanism)
+        if market.get("negRisk"):
+            continue
+
         # Check volume
         volume = market.get("volume24hr", 0) or market.get("volume", 0)
         try:
