@@ -75,14 +75,6 @@ def convert_to_bot_format(markets):
     """Convert to bot format with hex token IDs."""
     bot_markets = []
 
-    # Debug first market
-    if markets:
-        print("\nDEBUG: First market structure:")
-        print(f"  Keys: {list(markets[0].keys())}")
-        print(f"  tokens field: {markets[0].get('tokens')}")
-        print(f"  clobTokenIds field: {markets[0].get('clobTokenIds')}")
-        print()
-
     for market in markets:
         # Get condition ID
         condition_id = (market.get("conditionId") or
@@ -111,11 +103,17 @@ def convert_to_bot_format(markets):
         # Fallback to clobTokenIds
         if not yes_token or not no_token:
             clob_tokens = market.get("clobTokenIds", [])
-            print(f"DEBUG: Market '{market.get('question', 'Unknown')[:40]}' clobTokenIds type: {type(clob_tokens)}, value: {clob_tokens}")
+
+            # Parse JSON string if needed
+            if isinstance(clob_tokens, str):
+                try:
+                    clob_tokens = json.loads(clob_tokens)
+                except (json.JSONDecodeError, ValueError):
+                    clob_tokens = []
+
             if clob_tokens and len(clob_tokens) >= 2:
                 yes_token = clob_tokens[0]
                 no_token = clob_tokens[1]
-                print(f"  -> yes_token: {yes_token}, no_token: {no_token}")
 
         if not yes_token or not no_token:
             continue
@@ -123,11 +121,9 @@ def convert_to_bot_format(markets):
         # Validate token IDs are proper hex strings or integers
         if isinstance(yes_token, str):
             if not (yes_token.startswith('0x') or yes_token.isdigit()):
-                print(f"  Skipping {market.get('question', 'Unknown')[:50]} - invalid yes_token: {yes_token}")
                 continue
         if isinstance(no_token, str):
             if not (no_token.startswith('0x') or no_token.isdigit()):
-                print(f"  Skipping {market.get('question', 'Unknown')[:50]} - invalid no_token: {no_token}")
                 continue
 
         # Convert to hex if needed
