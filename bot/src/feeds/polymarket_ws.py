@@ -186,6 +186,8 @@ class PolymarketBookFeed:
         elif msg_type == "market": 
             # CLOB sometimes sends type='market' with data inside
             await self._handle_book_update(data)
+        elif msg_type == "price_change":
+            await self._handle_price_change(data)
         elif msg_type == "subscribed":
             logger.debug(f"Subscribed to {data.get('market')}")
         elif msg_type == "error":
@@ -231,6 +233,78 @@ class PolymarketBookFeed:
                 logger.info(f"First book update received for {token_id}: {bid_px}/{ask_px}")
 
         logger.debug(f"Book update for {token_id}: bid={bid_px}@{bid_sz}, ask={ask_px}@{ask_sz}")
+
+    async def _handle_price_change(self, data: dict) -> None:
+        """Handle incremental price updates."""
+        changes = data.get("price_changes")
+        if isinstance(changes, list):
+            for change in changes:
+                await self._apply_price_change(change)
+            return
+
+        await self._apply_price_change(data)
+
+    async def _apply_price_change(self, data: dict) -> None:
+        """Apply a single price change update to the top-of-book."""
+        if not isinstance(data, dict):
+            return
+
+        token_id = data.get("asset_id") or data.get("market")
+        if not token_id:
+            return
+
+        price = data.get("price")
+        if price is None:
+            return
+
+        side = (data.get("side") or "").lower()
+        if side in {"bid", "buy"}:
+            side_key = "bid"
+        elif side in {"ask", "sell"}:
+            side_key = "ask"
+        else:
+            logger.debug(f"Unknown price_change side: {data.get('side')}")
+            return
+
+        try:
+            price_value = float(price)
+        except (TypeError, ValueError):
+            return
+
+        size_value = None
+        if data.get("size") is not None:
+            try:
+                size_value = float(data.get("size"))
+            except (TypeError, ValueError):
+                size_value = None
+
+        timestamp = int(datetime.now().timestamp() * 1000)
+
+        with self._lock:
+            book = self._books.get(token_id)
+            if not book:
+                book = BookTop(
+                    token_id=token_id,
+                    bid_px=None,
+                    bid_sz=None,
+                    ask_px=None,
+                    ask_sz=None,
+                    ts=timestamp
+                )
+
+            if side_key == "bid":
+                book.bid_px = price_value
+                book.bid_sz = size_value
+            else:
+                book.ask_px = price_value
+                book.ask_sz = size_value
+
+            book.ts = timestamp
+            self._books[token_id] = book
+
+        logger.debug(
+            f"Price change for {token_id}: {side_key}={price_value}@{size_value}"
+        )
 
 
 class SimulatedBookFeed(PolymarketBookFeed):
