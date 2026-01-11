@@ -243,26 +243,18 @@ class PolymarketBookFeed:
         """Handle incremental price updates."""
         changes = data.get("price_changes")
         if isinstance(changes, list):
-            token_ids: set[str] = set()
             for change in changes:
-                token_id = self._extract_token_id(change)
-                if token_id:
-                    token_ids.add(token_id)
                 await self._apply_price_change(change)
-            await self._hydrate_missing_books(token_ids)
             return
 
-        token_id = self._extract_token_id(data)
         await self._apply_price_change(data)
-        if token_id:
-            await self._hydrate_missing_books({token_id})
 
     async def _apply_price_change(self, data: dict) -> None:
-        """Apply a single price change update to the L2 book and top-of-book."""
+        """Apply a single price change update to the top-of-book."""
         if not isinstance(data, dict):
             return
 
-        token_id = self._extract_token_id(data)
+        token_id = data.get("asset_id") or data.get("market")
         if not token_id:
             return
 
@@ -294,131 +286,30 @@ class PolymarketBookFeed:
         timestamp = int(datetime.now().timestamp() * 1000)
 
         with self._lock:
-            l2_book = self._l2_books.setdefault(token_id, {"bids": {}, "asks": {}})
-            side_map = l2_book["bids"] if side_key == "bid" else l2_book["asks"]
-            if size_value is None or size_value <= 0:
-                side_map.pop(price_value, None)
-            else:
-                side_map[price_value] = size_value
-
-            best_bid_px, best_bid_sz = self._best_price(l2_book["bids"], prefer_max=True)
-            best_ask_px, best_ask_sz = self._best_price(l2_book["asks"], prefer_max=False)
-
             book = self._books.get(token_id)
             if not book:
                 book = BookTop(
                     token_id=token_id,
-                    bid_px=best_bid_px,
-                    bid_sz=best_bid_sz,
-                    ask_px=best_ask_px,
-                    ask_sz=best_ask_sz,
+                    bid_px=None,
+                    bid_sz=None,
+                    ask_px=None,
+                    ask_sz=None,
                     ts=timestamp
                 )
+
+            if side_key == "bid":
+                book.bid_px = price_value
+                book.bid_sz = size_value
             else:
-                book.bid_px = best_bid_px
-                book.bid_sz = best_bid_sz
-                book.ask_px = best_ask_px
-                book.ask_sz = best_ask_sz
-                book.ts = timestamp
+                book.ask_px = price_value
+                book.ask_sz = size_value
+
+            book.ts = timestamp
             self._books[token_id] = book
 
         logger.debug(
             f"Price change for {token_id}: {side_key}={price_value}@{size_value}"
         )
-
-    async def _hydrate_missing_books(self, token_ids: set[str]) -> None:
-        """Seed missing L2 books with REST snapshots."""
-        now = time.time()
-        tasks = []
-        pending_tokens: list[str] = []
-        for token_id in token_ids:
-            if not token_id:
-                continue
-            if token_id in self._l2_books:
-                continue
-            last_fetch = self._last_rest_fetch.get(token_id, 0.0)
-            if now - last_fetch < self._rest_fetch_interval_s:
-                continue
-            self._last_rest_fetch[token_id] = now
-            pending_tokens.append(token_id)
-            tasks.append(asyncio.to_thread(self._fetch_orderbook_rest, token_id))
-
-        if not tasks:
-            return
-
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for token_id, result in zip(pending_tokens, results):
-            if isinstance(result, Exception):
-                logger.debug(f"REST snapshot failed for {token_id}: {result}")
-                continue
-            if result:
-                self._apply_snapshot(token_id, result)
-
-    def _fetch_orderbook_rest(self, token_id: str) -> Optional[dict]:
-        """Fetch a full orderbook snapshot from REST."""
-        url = f"https://clob.polymarket.com/book?token_id={token_id}"
-        try:
-            response = requests.get(url, timeout=5)
-            response.raise_for_status()
-            data = response.json()
-            if data.get("error"):
-                return None
-            return data
-        except Exception as exc:
-            logger.debug(f"REST orderbook fetch error for {token_id}: {exc}")
-            return None
-
-    def _apply_snapshot(self, token_id: str, data: dict) -> None:
-        """Apply a REST snapshot to L2 and top-of-book."""
-        bids = data.get("bids", [])
-        asks = data.get("asks", [])
-        with self._lock:
-            l2_book = {"bids": {}, "asks": {}}
-            for bid in bids:
-                try:
-                    price = float(bid["price"])
-                    size = float(bid["size"])
-                except (TypeError, ValueError, KeyError):
-                    continue
-                if size > 0:
-                    l2_book["bids"][price] = size
-            for ask in asks:
-                try:
-                    price = float(ask["price"])
-                    size = float(ask["size"])
-                except (TypeError, ValueError, KeyError):
-                    continue
-                if size > 0:
-                    l2_book["asks"][price] = size
-
-            self._l2_books[token_id] = l2_book
-
-            best_bid_px, best_bid_sz = self._best_price(l2_book["bids"], prefer_max=True)
-            best_ask_px, best_ask_sz = self._best_price(l2_book["asks"], prefer_max=False)
-            timestamp = int(datetime.now().timestamp() * 1000)
-            self._books[token_id] = BookTop(
-                token_id=token_id,
-                bid_px=best_bid_px,
-                bid_sz=best_bid_sz,
-                ask_px=best_ask_px,
-                ask_sz=best_ask_sz,
-                ts=timestamp
-            )
-
-    def _extract_token_id(self, data: dict) -> Optional[str]:
-        """Extract token identifier from message."""
-        if not isinstance(data, dict):
-            return None
-        return data.get("asset_id") or data.get("market")
-
-    def _best_price(
-        self, levels: Dict[float, float], prefer_max: bool
-    ) -> tuple[Optional[float], Optional[float]]:
-        """Return best price and size from L2 levels."""
-        if not levels:
-            return None, None
-        best_price = max(levels) if prefer_max else min(levels)
-        return best_price, levels.get(best_price)
 
 
 class SimulatedBookFeed(PolymarketBookFeed):
