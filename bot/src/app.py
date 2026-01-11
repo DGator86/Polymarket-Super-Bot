@@ -11,7 +11,8 @@ from src.config import load_config
 from src.logging_setup import setup_logging, get_logger
 from src.market_registry import MarketRegistry
 from src.feeds.polymarket_ws import PolymarketBookFeed, SimulatedBookFeed
-from src.feeds.spot_ws import SpotPriceFeed, SimulatedSpotFeed, BinanceSpotFeed
+from src.feeds.kraken_feed import KrakenSpotFeed
+from src.feeds.spot_ws import SpotPriceFeed, SimulatedSpotFeed
 from src.strategy.fair_price import FairPriceCalculator
 from src.strategy.lag_arb import LagArbStrategy
 from src.strategy.market_maker import MarketMakerStrategy
@@ -100,8 +101,8 @@ class PolymarketBot:
         # Use real feeds for production/live data
         self.book_feed = PolymarketBookFeed()
         
-        # Spot feed: use Binance for Crypto, empty/simulated for sports (routers will fallback)
-        self.spot_feed = BinanceSpotFeed(symbols=["BTCUSDT", "ETHUSDT", "SOLUSDT"])
+        # Spot feed: use Kraken for Crypto (US-friendly), empty/simulated for sports (routers will fallback)
+        self.spot_feed = KrakenSpotFeed(symbols=["BTCUSDT", "ETHUSDT", "SOLUSDT", "MATICUSDT"])
 
         # Subscribe to markets
         markets = self.registry.get_all_markets()
