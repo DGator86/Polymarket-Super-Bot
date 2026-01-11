@@ -108,30 +108,58 @@ def filter_markets(markets, min_volume=10000, max_days_until_expiry=60):
 def convert_to_bot_format(markets):
     """Convert Polymarket API format to bot's markets.json format."""
     bot_markets = []
+    skipped = 0
 
     for market in markets:
-        # Get condition ID and tokens
-        condition_id = market.get("conditionId") or market.get("condition_id")
+        # Get condition ID - try multiple field names
+        condition_id = (market.get("conditionId") or
+                       market.get("condition_id") or
+                       market.get("clobTokenIds") or
+                       market.get("questionID"))
+
         if not condition_id:
+            skipped += 1
             continue
 
-        # Get token IDs
+        # Get token IDs - try multiple approaches
         tokens = market.get("tokens", [])
-        if len(tokens) < 2:
-            continue
-
-        # Find YES and NO tokens
         yes_token = None
         no_token = None
 
-        for token in tokens:
-            outcome = token.get("outcome", "").upper()
-            if outcome == "YES":
-                yes_token = token.get("token_id") or token.get("tokenId")
-            elif outcome == "NO":
-                no_token = token.get("token_id") or token.get("tokenId")
+        # Method 1: tokens array with outcome field
+        if tokens and len(tokens) >= 2:
+            for token in tokens:
+                outcome = str(token.get("outcome", "")).upper()
+                token_id = (token.get("token_id") or
+                           token.get("tokenId") or
+                           token.get("id"))
+
+                if outcome == "YES" and token_id:
+                    yes_token = token_id
+                elif outcome == "NO" and token_id:
+                    no_token = token_id
+
+        # Method 2: Direct token ID fields
+        if not yes_token or not no_token:
+            yes_token = (market.get("yesTokenId") or
+                        market.get("yes_token_id") or
+                        (tokens[0].get("token_id") if len(tokens) > 0 else None) or
+                        (tokens[0].get("tokenId") if len(tokens) > 0 else None))
+
+            no_token = (market.get("noTokenId") or
+                       market.get("no_token_id") or
+                       (tokens[1].get("token_id") if len(tokens) > 1 else None) or
+                       (tokens[1].get("tokenId") if len(tokens) > 1 else None))
+
+        # Method 3: clobTokenIds array
+        if not yes_token or not no_token:
+            clob_tokens = market.get("clobTokenIds", [])
+            if len(clob_tokens) >= 2:
+                yes_token = clob_tokens[0]
+                no_token = clob_tokens[1]
 
         if not yes_token or not no_token:
+            skipped += 1
             continue
 
         # Get expiry timestamp
@@ -168,6 +196,9 @@ def convert_to_bot_format(markets):
         }
 
         bot_markets.append(bot_market)
+
+    if skipped > 0:
+        print(f"Skipped {skipped} markets due to missing token/condition data")
 
     return bot_markets
 
