@@ -144,6 +144,7 @@ class PolymarketBookFeed:
             "assets_ids": token_ids,
             "type": "market"
         }
+        logger.info(f"Sending subscription message: {json.dumps(message)[:200]}...")
         await ws.send(json.dumps(message))
         logger.info(f"Sent batch subscription for {len(token_ids)} tokens")
 
@@ -172,24 +173,27 @@ class PolymarketBookFeed:
     async def _process_single_message(self, data: dict) -> None:
         """Process a single message object."""
         if not isinstance(data, dict):
+            logger.warning(f"Received non-dict message: {type(data)}")
             return
 
         # Handle different message types
         # Log the first few messages to debug structure
-        logger.info(f"Received message type: {data.get('event_type') or data.get('type')}, keys: {list(data.keys())}")
+        msg_type = data.get('event_type') or data.get('type')
+        logger.info(f"Received message type: {msg_type}, keys: {list(data.keys())}, sample: {str(data)[:150]}")
 
         # CLOB often uses 'event_type' or just 'type'
-        msg_type = data.get("event_type") or data.get("type")
-        
+
         if msg_type == "book":
             await self._handle_book_update(data)
-        elif msg_type == "market": 
+        elif msg_type == "market":
             # CLOB sometimes sends type='market' with data inside
             await self._handle_book_update(data)
         elif msg_type == "subscribed":
-            logger.debug(f"Subscribed to {data.get('market')}")
+            logger.info(f"✓ Subscription confirmed for {data.get('market')}")
         elif msg_type == "error":
             logger.error(f"WebSocket error message: {data}")
+        else:
+            logger.warning(f"Unknown message type '{msg_type}': {str(data)[:200]}")
 
     async def _handle_book_update(self, data: dict) -> None:
         """Handle orderbook update message."""
