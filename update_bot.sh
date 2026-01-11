@@ -14,7 +14,8 @@ git pull origin claude/check-bot-status-TDbVL
 echo ""
 echo "🔄 Restarting bot..."
 cd bot
-docker-compose restart
+docker compose down
+docker compose up -d --build --force-recreate
 
 echo ""
 echo "⏳ Waiting for bot to initialize..."
