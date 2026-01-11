@@ -265,12 +265,62 @@ class PolymarketBookFeed:
     async def _handle_price_change(self, data: dict) -> None:
         """Handle price change message from WebSocket.
 
-        These messages don't contain full orderbook, so we trigger REST polling.
-        Message structure: {'event_type': 'price_change', 'price_changes': [...], 'market': '...', 'asset_id': '...'}
+        New schema (post-Sep 2025): Contains best_bid/best_ask in price_changes array.
+        Message structure: {'event_type': 'price_change', 'market': '...',
+                           'price_changes': [{'asset_id': '...', 'price': '...', 'size': '...',
+                                            'side': 'BUY'/'SELL', 'best_bid': '...', 'best_ask': '...'}]}
         """
-        logger.debug(f"Price change received, triggering orderbook fetch via REST")
-        # Price change messages signal market activity but don't have full orderbook
-        # We rely on REST polling for actual book data
+        market = data.get("market")
+        price_changes = data.get("price_changes", [])
+
+        if not isinstance(price_changes, list):
+            logger.warning(f"price_change malformed: price_changes={price_changes}")
+            return
+
+        for change in price_changes:
+            try:
+                asset_id = str(change["asset_id"])
+                best_bid = change.get("best_bid")
+                best_ask = change.get("best_ask")
+
+                # Skip if no price data
+                if best_bid is None and best_ask is None:
+                    continue
+
+                # Parse bid/ask prices
+                bid_px = float(best_bid) if best_bid is not None else None
+                ask_px = float(best_ask) if best_ask is not None else None
+
+                # Use size from the change if available, otherwise use reasonable default
+                size = change.get("size")
+                bid_sz = float(size) if size and bid_px else 10.0
+                ask_sz = float(size) if size and ask_px else 10.0
+
+                # Current time in microseconds
+                timestamp = int(datetime.now().timestamp() * 1_000_000)
+
+                # Create or update book
+                book = BookTop(
+                    token_id=asset_id,
+                    bid_px=bid_px,
+                    bid_sz=bid_sz,
+                    ask_px=ask_px,
+                    ask_sz=ask_sz,
+                    ts=timestamp
+                )
+
+                with self._lock:
+                    self._books[asset_id] = book
+
+                    # Log first price_change update
+                    if len(self._books) == 1:
+                        logger.info(f"First price_change update for {asset_id}: {bid_px}/{ask_px}")
+
+                logger.debug(f"Price update for {asset_id}: bid={bid_px}, ask={ask_px}")
+
+            except (KeyError, ValueError, TypeError) as e:
+                logger.warning(f"Failed to parse price_change entry: {e}, data={change}")
+                continue
 
     def _fetch_orderbook_rest(self, token_id: str) -> Optional[BookTop]:
         """Fetch orderbook for a token via REST API."""
