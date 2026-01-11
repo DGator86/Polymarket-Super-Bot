@@ -45,10 +45,6 @@ def filter_short_term_markets(markets, min_volume=5000, min_days=1, max_days=30)
         if not market.get("enableOrderBook"):
             continue
 
-        # Skip negRisk markets (they use different trading mechanism)
-        if market.get("negRisk"):
-            continue
-
         # Check volume
         volume = market.get("volume24hr", 0) or market.get("volume", 0)
         try:
@@ -130,25 +126,21 @@ def convert_to_bot_format(markets):
         if not yes_token or not no_token:
             continue
 
-        # Validate token IDs are proper hex strings or integers
-        if isinstance(yes_token, str):
-            if not (yes_token.startswith('0x') or yes_token.isdigit()):
-                continue
-        if isinstance(no_token, str):
-            if not (no_token.startswith('0x') or no_token.isdigit()):
-                continue
-
-        # Convert to hex if needed
+        # CRITICAL: Keep token IDs as strings (CLOB expects decimal strings, not hex)
+        # The clobTokenIds from Gamma API are already in the correct format
+        # Convert integers to strings, but DON'T convert to hex
         if isinstance(yes_token, int):
-            yes_token = hex(yes_token)
-        elif isinstance(yes_token, str) and yes_token.isdigit():
-            yes_token = hex(int(yes_token))
-
+            yes_token = str(yes_token)
         if isinstance(no_token, int):
-            no_token = hex(no_token)
-        elif isinstance(no_token, str) and no_token.isdigit():
-            no_token = hex(int(no_token))
+            no_token = str(no_token)
 
+        # Ensure they're numeric strings (decimal format for CLOB API)
+        if isinstance(yes_token, str) and not yes_token.isdigit():
+            continue
+        if isinstance(no_token, str) and not no_token.isdigit():
+            continue
+
+        # Keep condition_id as-is (it can be hex for on-chain operations)
         if isinstance(condition_id, int):
             condition_id = hex(condition_id)
         elif isinstance(condition_id, str) and condition_id.isdigit():
@@ -198,9 +190,9 @@ def main():
     all_markets = fetch_polymarket_markets(limit=300)
     print(f"Fetched {len(all_markets)} total markets")
 
-    # Filter for short-term markets (1-30 days) - lower volume to find ANY markets
+    # Filter for short-term markets (1-30 days)
     print("Filtering for markets expiring in 1-30 days with orderbooks...")
-    filtered = filter_short_term_markets(all_markets, min_volume=100, min_days=1, max_days=30)
+    filtered = filter_short_term_markets(all_markets, min_volume=5000, min_days=1, max_days=30)
     print(f"Found {len(filtered)} short-term markets")
 
     if not filtered:
