@@ -198,9 +198,9 @@ def main():
     all_markets = fetch_polymarket_markets(limit=300)
     print(f"Fetched {len(all_markets)} total markets")
 
-    # Filter for short-term markets (1-30 days)
-    print("Filtering for markets expiring in 1-30 days with high 24h volume...")
-    filtered = filter_short_term_markets(all_markets, min_volume=5000, min_days=1, max_days=30)
+    # Filter for short-term markets (1-30 days) - lower volume to find ANY markets
+    print("Filtering for markets expiring in 1-30 days with orderbooks...")
+    filtered = filter_short_term_markets(all_markets, min_volume=100, min_days=1, max_days=30)
     print(f"Found {len(filtered)} short-term markets")
 
     if not filtered:
