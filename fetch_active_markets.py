@@ -172,6 +172,23 @@ def convert_to_bot_format(markets):
             skipped += 1
             continue
 
+        # Convert token IDs to hex string format if they're integers
+        if isinstance(yes_token, int):
+            yes_token = hex(yes_token)
+        elif isinstance(yes_token, str) and not yes_token.startswith('0x'):
+            try:
+                yes_token = hex(int(yes_token))
+            except ValueError:
+                pass
+
+        if isinstance(no_token, int):
+            no_token = hex(no_token)
+        elif isinstance(no_token, str) and not no_token.startswith('0x'):
+            try:
+                no_token = hex(int(no_token))
+            except ValueError:
+                pass
+
         # Get expiry timestamp
         end_date = market.get("endDate") or market.get("end_date_iso")
         expiry_ts = None
@@ -191,6 +208,14 @@ def convert_to_bot_format(markets):
             volume = float(volume) if volume else 0.0
         except (ValueError, TypeError):
             volume = 0.0
+
+        # Ensure condition_id is a hex string if provided
+        if condition_id:
+            if isinstance(condition_id, int):
+                condition_id = hex(condition_id)
+            elif isinstance(condition_id, str) and not condition_id.startswith('0x'):
+                # Already in correct format
+                pass
 
         bot_market = {
             "slug": market.get("slug", ""),
