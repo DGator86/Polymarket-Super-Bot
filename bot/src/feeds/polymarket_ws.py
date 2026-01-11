@@ -7,6 +7,7 @@ from typing import Dict, Optional, Set
 from datetime import datetime
 import websockets
 import json
+import requests
 from src.models import BookTop
 from src.logging_setup import get_logger
 
@@ -19,8 +20,17 @@ class PolymarketBookFeed:
     Maintains top-of-book snapshots per token_id.
     """
 
-    def __init__(self, ws_url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"):
+    def __init__(
+        self,
+        ws_url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+        rest_url: str = "https://clob.polymarket.com",
+        enable_rest_polling: bool = True,
+        rest_poll_interval: int = 5
+    ):
         self.ws_url = ws_url
+        self.rest_url = rest_url
+        self.enable_rest_polling = enable_rest_polling
+        self.rest_poll_interval = rest_poll_interval
         self._books: Dict[str, BookTop] = {}
         self._lock = threading.RLock()
         self._subscribed_tokens: Set[str] = set()
@@ -104,6 +114,11 @@ class PolymarketBookFeed:
 
     async def _connect_and_consume(self) -> None:
         """Connect to WebSocket and consume messages."""
+        # Start REST polling task if enabled
+        rest_task = None
+        if self.enable_rest_polling:
+            rest_task = asyncio.create_task(self._rest_polling_loop())
+
         retry_delay = 1
         max_retry_delay = 60
 
@@ -134,6 +149,14 @@ class PolymarketBookFeed:
                 logger.info(f"Reconnecting in {retry_delay}s...")
                 await asyncio.sleep(retry_delay)
                 retry_delay = min(retry_delay * 2, max_retry_delay)
+
+        # Cancel REST task when stopping
+        if rest_task and not rest_task.done():
+            rest_task.cancel()
+            try:
+                await rest_task
+            except asyncio.CancelledError:
+                pass
 
     async def _send_subscribe_batch(self, ws, token_ids: list[str]) -> None:
         """
@@ -188,6 +211,9 @@ class PolymarketBookFeed:
         elif msg_type == "market":
             # CLOB sometimes sends type='market' with data inside
             await self._handle_book_update(data)
+        elif msg_type == "price_change":
+            # Handle price change messages - extract price info
+            await self._handle_price_change(data)
         elif msg_type == "subscribed":
             logger.info(f"✓ Subscription confirmed for {data.get('market')}")
         elif msg_type == "error":
@@ -235,6 +261,94 @@ class PolymarketBookFeed:
                 logger.info(f"First book update received for {token_id}: {bid_px}/{ask_px}")
 
         logger.debug(f"Book update for {token_id}: bid={bid_px}@{bid_sz}, ask={ask_px}@{ask_sz}")
+
+    async def _handle_price_change(self, data: dict) -> None:
+        """Handle price change message from WebSocket.
+
+        These messages don't contain full orderbook, so we trigger REST polling.
+        Message structure: {'event_type': 'price_change', 'price_changes': [...], 'market': '...', 'asset_id': '...'}
+        """
+        logger.debug(f"Price change received, triggering orderbook fetch via REST")
+        # Price change messages signal market activity but don't have full orderbook
+        # We rely on REST polling for actual book data
+
+    def _fetch_orderbook_rest(self, token_id: str) -> Optional[BookTop]:
+        """Fetch orderbook for a token via REST API."""
+        try:
+            url = f"{self.rest_url}/book"
+            params = {"token_id": token_id}
+
+            response = requests.get(url, params=params, timeout=5)
+            response.raise_for_status()
+            data = response.json()
+
+            # Parse response: {"bids": [[price, size], ...], "asks": [[price, size], ...]}
+            bids = data.get("bids", [])
+            asks = data.get("asks", [])
+
+            if not bids and not asks:
+                return None
+
+            # Extract top of book
+            bid_px = float(bids[0][0]) if bids else None
+            bid_sz = float(bids[0][1]) if bids else None
+            ask_px = float(asks[0][0]) if asks else None
+            ask_sz = float(asks[0][1]) if asks else None
+
+            # Current time in microseconds
+            timestamp = int(datetime.now().timestamp() * 1_000_000)
+
+            book = BookTop(
+                token_id=token_id,
+                bid_px=bid_px,
+                bid_sz=bid_sz,
+                ask_px=ask_px,
+                ask_sz=ask_sz,
+                ts=timestamp
+            )
+
+            return book
+
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Failed to fetch orderbook for {token_id}: {e}")
+            return None
+        except (KeyError, IndexError, ValueError) as e:
+            logger.warning(f"Failed to parse orderbook for {token_id}: {e}")
+            return None
+
+    async def _rest_polling_loop(self) -> None:
+        """Periodically poll REST API for orderbook updates."""
+        logger.info(f"Starting REST polling loop (interval={self.rest_poll_interval}s)")
+
+        while self._running:
+            try:
+                # Get current subscribed tokens
+                with self._lock:
+                    tokens = list(self._subscribed_tokens)
+
+                if tokens:
+                    # Fetch orderbooks for all tokens
+                    for token_id in tokens:
+                        if not self._running:
+                            break
+
+                        book = self._fetch_orderbook_rest(token_id)
+                        if book:
+                            with self._lock:
+                                self._books[token_id] = book
+
+                                # Log first successful fetch
+                                if len(self._books) == 1:
+                                    logger.info(f"First REST orderbook fetched for {token_id}: {book.bid_px}/{book.ask_px}")
+
+                    logger.debug(f"REST poll complete: {len(self._books)} books updated")
+
+                # Sleep for polling interval
+                await asyncio.sleep(self.rest_poll_interval)
+
+            except Exception as e:
+                logger.error(f"Error in REST polling loop: {e}", exc_info=True)
+                await asyncio.sleep(self.rest_poll_interval)
 
 
 class SimulatedBookFeed(PolymarketBookFeed):
