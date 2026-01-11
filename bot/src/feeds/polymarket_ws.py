@@ -154,6 +154,7 @@ class PolymarketBookFeed:
     async def _handle_message(self, message: str) -> None:
         """Handle incoming WebSocket message."""
         try:
+            logger.debug(f"Received WebSocket message (length: {len(message)})")
             data = json.loads(message)
 
             # Handle list of messages
@@ -175,8 +176,8 @@ class PolymarketBookFeed:
 
         # Handle different message types
         # Log the first few messages to debug structure
-        # logger.info(f"Received message type: {data.get('event_type') or data.get('type')}")
-        
+        logger.info(f"Received message type: {data.get('event_type') or data.get('type')}, keys: {list(data.keys())}")
+
         # CLOB often uses 'event_type' or just 'type'
         msg_type = data.get("event_type") or data.get("type")
         
