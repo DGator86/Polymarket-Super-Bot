@@ -30,13 +30,21 @@ def fetch_polymarket_markets(limit=300):
         return []
 
 def filter_short_term_markets(markets, min_volume=5000, min_days=1, max_days=30):
-    """Filter for short-term, high-activity markets."""
+    """Filter for short-term, high-activity markets that are accepting orders."""
     filtered = []
     now = datetime.now().timestamp()
     min_expiry = now + (min_days * 24 * 60 * 60)
     max_expiry = now + (max_days * 24 * 60 * 60)
 
     for market in markets:
+        # CRITICAL: Must be accepting orders NOW
+        if not market.get("acceptingOrders"):
+            continue
+
+        # Must have order book enabled
+        if not market.get("enableOrderBook"):
+            continue
+
         # Check volume
         volume = market.get("volume24hr", 0) or market.get("volume", 0)
         try:
