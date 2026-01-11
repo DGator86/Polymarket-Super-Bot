@@ -12,9 +12,9 @@ echo "📥 Pulling latest changes..."
 git pull origin claude/check-bot-status-TDbVL
 
 echo ""
-echo "🔄 Restarting bot..."
+echo "🔄 Rebuilding and restarting bot..."
 cd bot
-docker-compose restart
+docker-compose up -d --build
 
 echo ""
 echo "⏳ Waiting for bot to initialize..."
