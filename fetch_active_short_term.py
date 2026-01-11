@@ -100,22 +100,41 @@ def convert_to_bot_format(markets):
                 elif outcome == "NO" and token_id:
                     no_token = token_id
 
+        # Fallback to clobTokenIds
         if not yes_token or not no_token:
             clob_tokens = market.get("clobTokenIds", [])
-            if len(clob_tokens) >= 2:
+            if clob_tokens and len(clob_tokens) >= 2:
                 yes_token = clob_tokens[0]
                 no_token = clob_tokens[1]
 
         if not yes_token or not no_token:
             continue
 
+        # Validate token IDs are proper hex strings or integers
+        if isinstance(yes_token, str):
+            if not (yes_token.startswith('0x') or yes_token.isdigit()):
+                print(f"  Skipping {market.get('question', 'Unknown')[:50]} - invalid yes_token: {yes_token}")
+                continue
+        if isinstance(no_token, str):
+            if not (no_token.startswith('0x') or no_token.isdigit()):
+                print(f"  Skipping {market.get('question', 'Unknown')[:50]} - invalid no_token: {no_token}")
+                continue
+
         # Convert to hex if needed
         if isinstance(yes_token, int):
             yes_token = hex(yes_token)
+        elif isinstance(yes_token, str) and yes_token.isdigit():
+            yes_token = hex(int(yes_token))
+
         if isinstance(no_token, int):
             no_token = hex(no_token)
+        elif isinstance(no_token, str) and no_token.isdigit():
+            no_token = hex(int(no_token))
+
         if isinstance(condition_id, int):
             condition_id = hex(condition_id)
+        elif isinstance(condition_id, str) and condition_id.isdigit():
+            condition_id = hex(int(condition_id))
 
         # Get expiry
         end_date = market.get("endDate") or market.get("end_date_iso")
