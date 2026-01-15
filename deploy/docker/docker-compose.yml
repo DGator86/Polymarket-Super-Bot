@@ -1,0 +1,63 @@
+# Kalshi Prediction Bot - Docker Compose
+# Run with: docker-compose up -d
+
+version: '3.8'
+
+services:
+  kalshi-bot:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    container_name: kalshi-prediction-bot
+    restart: unless-stopped
+    
+    # Environment file
+    env_file:
+      - ../../.env
+    
+    # Override specific settings
+    environment:
+      - DATABASE_PATH=/app/data/trades.db
+      - LOG_LEVEL=INFO
+      - PYTHONUNBUFFERED=1
+    
+    # Mount volumes
+    volumes:
+      # Persist database
+      - kalshi-data:/app/data
+      
+      # Mount RSA keys (if provided externally)
+      # - ./kalshi_private_key.pem:/app/kalshi_private_key.pem:ro
+      # - ./kalshi_public_key.pem:/app/kalshi_public_key.pem:ro
+      
+      # Mount .env file
+      # - ./.env:/app/.env:ro
+    
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+volumes:
+  kalshi-data:
+    driver: local

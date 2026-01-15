@@ -1,0 +1,14 @@
+# Kalshi Bot - Server List for Multi-Deployment
+# Add one server per line in the format: user@hostname
+# Lines starting with # are comments
+
+# Example entries (replace with your actual VPS details):
+# ubuntu@vps1.example.com
+# root@192.168.1.100
+# trader@vps2.yourdomain.com
+# deploy@10.0.0.50
+
+# Tips:
+# - Ensure SSH key-based authentication is set up for passwordless deployment
+# - The user should have sudo access for systemd service installation
+# - Python 3.8+ must be installed on each server
