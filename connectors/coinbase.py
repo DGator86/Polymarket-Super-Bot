@@ -119,7 +119,7 @@ class CoinbaseClient:
                 bid=Decimal(data["bid"]),
                 ask=Decimal(data["ask"]),
                 volume_24h=Decimal(data["volume"]),
-                timestamp=datetime.fromisoformat(data["time"].replace("Z", "+00:00")),
+                timestamp=datetime.now(timezone.utc),
                 exchange="coinbase"
             )
     
@@ -279,7 +279,7 @@ class CoinbaseClient:
                 bid=Decimal(data.get("best_bid", data["price"])),
                 ask=Decimal(data.get("best_ask", data["price"])),
                 volume_24h=Decimal(data.get("volume_24h", "0")),
-                timestamp=datetime.fromisoformat(data["time"].replace("Z", "+00:00")),
+                timestamp=datetime.now(timezone.utc),
                 exchange="coinbase"
             )
         except (KeyError, ValueError) as e:

@@ -39,8 +39,8 @@ class DataSourceConfig:
 @dataclass(frozen=True)
 class UniverseEngineConfig:
     """Pre-filter thresholds for market selection"""
-    min_liquidity_usd: Decimal = Decimal("50")  # Minimum $ at best quote
-    max_spread_pct: Decimal = Decimal("0.10")   # 10% max bid-ask spread
+    min_liquidity_usd: Decimal = Decimal("5")  # Minimum $ at best quote
+    max_spread_pct: Decimal = Decimal("0.20")   # 10% max bid-ask spread
     min_time_to_expiry_hours: int = 1           # Avoid near-settlement markets
     max_markets_to_analyze: int = 50            # Cap expensive computation
     
@@ -48,7 +48,7 @@ class UniverseEngineConfig:
 @dataclass(frozen=True)
 class ProbabilityEngineConfig:
     """Model probability computation settings"""
-    min_edge_pct: Decimal = Decimal("0.05")     # 5% minimum edge after fees
+    min_edge_pct: Decimal = Decimal("0.03")     # 5% minimum edge after fees
     confidence_threshold: Decimal = Decimal("0.70")  # 70% model confidence required
     kalshi_fee_pct: Decimal = Decimal("0.01")   # 1% fee assumption (varies)
     
