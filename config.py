@@ -49,7 +49,7 @@ class UniverseEngineConfig:
 class ProbabilityEngineConfig:
     """Model probability computation settings"""
     min_edge_pct: Decimal = Decimal("0.03")     # 5% minimum edge after fees
-    confidence_threshold: Decimal = Decimal("0.70")  # 70% model confidence required
+    confidence_threshold: Decimal = Decimal("0.60")  # 70% model confidence required
     kalshi_fee_pct: Decimal = Decimal("0.01")   # 1% fee assumption (varies)
     
 

@@ -137,7 +137,7 @@ class ProbabilityEngine:
             return None
         
         if model_output.confidence < self.min_confidence:
-            logger.debug(f"{market.ticker}: Low confidence ({model_output.confidence})")
+            logger.info(f"{market.ticker}: Low confidence ({model_output.confidence})")
             return None
         
         # Determine which side has edge
@@ -161,13 +161,13 @@ class ProbabilityEngine:
             edge = no_edge
             entry_price = Decimal("1") - market.best_bid  # Cost to buy NO
         else:
-            logger.debug(f"{market.ticker}: Insufficient edge (YES: {yes_edge}, NO: {no_edge})")
+            logger.info(f"{market.ticker}: Insufficient edge (YES: {yes_edge}, NO: {no_edge})")
             return None
         
         # Adjust edge for fees
         adjusted_edge = edge - self.fee_pct
         if adjusted_edge <= 0:
-            logger.debug(f"{market.ticker}: Edge eaten by fees")
+            logger.info(f"{market.ticker}: Edge eaten by fees")
             return None
         
         # Calculate expected value
