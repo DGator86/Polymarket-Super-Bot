@@ -92,11 +92,11 @@ class IntegratedPaperEngine:
         data_dir: str = "paper_trading_data",
         maker_enabled: bool = True,
         taker_enabled: bool = True,
-        min_edge_taker: int = 3,  # cents
-        min_edge_maker: int = 2,  # cents
-        max_position_per_market: Decimal = Decimal("0.1"),
+        min_edge_taker: int = 2,  # cents
+        min_edge_maker: int = 1,  # cents
+        max_position_per_market: Decimal = Decimal("0.15"),
         max_daily_loss: Decimal = Decimal("0.05"),
-        kelly_fraction: Decimal = Decimal("0.25")
+        kelly_fraction: Decimal = Decimal("0.5")
     ):
         self.initial_capital = initial_capital
         self.cash = initial_capital
@@ -319,7 +319,7 @@ class IntegratedPaperEngine:
         b = potential_win / potential_loss
         
         kelly = (p * b - q) / b
-        kelly = max(0, min(kelly, 0.25))  # Cap at 25%
+        kelly = max(0, min(kelly, 0.5))  # Cap at 50% for aggressive mode
         
         # Apply our fraction
         fraction = kelly * float(self.kelly_fraction)
@@ -334,7 +334,7 @@ class IntegratedPaperEngine:
         # Apply Kelly sizing
         contracts = int(max_contracts * fraction)
         
-        return max(0, min(contracts, 100))  # Min 0, max 100 contracts
+        return max(0, min(contracts, 250))  # Min 0, max 250 contracts for aggressive mode
         
     async def scan_for_opportunities(
         self,
