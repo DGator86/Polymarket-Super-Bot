@@ -85,8 +85,7 @@ class UniverseEngine:
         import time
         start = time.time()
         
-        # Fetch markets from allowed series (connector handles allowlist)
-        raw_markets = await self.kalshi.get_markets(status="open", limit=500)
+        raw_markets = await self.kalshi.get_markets(status="open", limit=1000)
         total = len(raw_markets)
         
         logger.info(f"Universe scan starting: {total} markets")
@@ -95,7 +94,6 @@ class UniverseEngine:
         stats = {"passed_liquidity": 0, "passed_spread": 0, "passed_expiry": 0}
         
         for raw in raw_markets:
-            # MVE filtering now handled by connector allowlist
             ticker = raw.get("ticker", "")
             
             if ticker in self._blacklist:
@@ -111,27 +109,17 @@ class UniverseEngine:
             from connectors.kalshi import KalshiClient as KClient
             market = KClient.normalize_market(raw, orderbook)
             
-            # Filter 1: Liquidity (use market liquidity field OR orderbook liquidity)
+            # Filter 1: Liquidity
             bid_value = market.best_bid * market.bid_size
             ask_value = (Decimal("1") - market.best_ask) * market.ask_size
-            orderbook_liq = max(bid_value, ask_value)  # Use max for one-sided markets
+            min_side_liquidity = min(bid_value, ask_value)
             
-            # Also check raw market liquidity field (Kalshi provides this)
-            raw_liq = Decimal(str(raw.get("liquidity", 0)))
-            effective_liq = max(orderbook_liq, raw_liq)
-            
-            if effective_liq < self.min_liquidity:
+            if min_side_liquidity < self.min_liquidity:
                 continue
             stats["passed_liquidity"] += 1
             
-            # Filter 2: Spread (skip for one-sided markets)
-            # One-sided markets have very high calculated spread but are still tradeable
-            if market.best_bid > 0 and market.best_ask < 1:
-                # Two-sided market - check spread
-                if market.spread_pct > self.max_spread_pct:
-                    continue
-            # For one-sided markets, just check that there is some orderbook activity
-            elif market.bid_size == 0 and market.ask_size == 0:
+            # Filter 2: Spread
+            if market.spread_pct > self.max_spread_pct:
                 continue
             stats["passed_spread"] += 1
             

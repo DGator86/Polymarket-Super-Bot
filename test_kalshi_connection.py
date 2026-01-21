@@ -6,6 +6,7 @@ Test script to verify Kalshi API connection and credentials.
 import asyncio
 import sys
 import os
+from aiohttp_socks import ProxyConnector
 
 # Add current directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -42,7 +43,13 @@ class SimpleKalshiClient:
     
     async def connect(self):
         self._load_private_key()
-        self.session = aiohttp.ClientSession()
+        try:
+            connector = ProxyConnector.from_url("socks5://127.0.0.1:9050")
+            self.session = aiohttp.ClientSession(connector=connector)
+            print("   Using SOCKS5 proxy at 127.0.0.1:9050")
+        except Exception as e:
+            print(f"   Proxy connection failed: {e}. Falling back to direct.")
+            self.session = aiohttp.ClientSession()
         # NOTE: Kalshi no longer uses /log_in token - authenticate directly with each request
         
     async def close(self):

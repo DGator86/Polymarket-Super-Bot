@@ -96,6 +96,43 @@ class CoinbaseClient:
     # PUBLIC REST API (No Auth Required)
     # =========================================================================
     
+    async def get_candles(
+        self, 
+        symbol: str, 
+        granularity: int = 900,
+        start: Optional[int] = None,
+        end: Optional[int] = None
+    ) -> List[Dict]:
+        """
+        Get historical candles for a product.
+        
+        Args:
+            symbol: Product ID (e.g. 'BTC-USD')
+            granularity: Candle size in seconds (60, 300, 900, 3600, 21600, 86400)
+            start: Start timestamp (Unix epoch seconds)
+            end: End timestamp (Unix epoch seconds)
+        """
+        if not self.session:
+            await self.connect()
+            
+        # Coinbase Exchange API (formerly Pro)
+        url = f"{self.PUBLIC_REST_URL}/products/{symbol}/candles"
+        params = {"granularity": granularity}
+        if start:
+            params["start"] = datetime.fromtimestamp(start, timezone.utc).isoformat()
+        if end:
+            params["end"] = datetime.fromtimestamp(end, timezone.utc).isoformat()
+        
+        async with self.session.get(url, params=params) as resp:
+            if resp.status != 200:
+                text = await resp.text()
+                # Log warning but return empty list to allow retry/skip logic
+                logger.warning(f"Coinbase API error: {resp.status} - {text}")
+                return []
+            
+            # Returns [time, low, high, open, close, volume]
+            return await resp.json()
+
     async def get_price(self, symbol: str = "BTC-USD") -> CryptoPrice:
         """
         Get current price for a trading pair.
@@ -119,7 +156,7 @@ class CoinbaseClient:
                 bid=Decimal(data["bid"]),
                 ask=Decimal(data["ask"]),
                 volume_24h=Decimal(data["volume"]),
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.fromisoformat(data["time"].replace("Z", "+00:00")),
                 exchange="coinbase"
             )
     
@@ -279,7 +316,7 @@ class CoinbaseClient:
                 bid=Decimal(data.get("best_bid", data["price"])),
                 ask=Decimal(data.get("best_ask", data["price"])),
                 volume_24h=Decimal(data.get("volume_24h", "0")),
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.fromisoformat(data["time"].replace("Z", "+00:00")),
                 exchange="coinbase"
             )
         except (KeyError, ValueError) as e:

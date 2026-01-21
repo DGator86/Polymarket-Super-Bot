@@ -82,8 +82,8 @@ class Fast15mPaperTrader:
             async with aiohttp.ClientSession(connector=connector) as session:
                 for series in SERIES_15M:
                     url = "https://api.elections.kalshi.com/trade-api/v2/markets"
-                    # Key fix: use status=open for 15m markets
-                    params = {"series_ticker": series, "status": "open", "limit": 50}
+                    # Key fix: use status=active for 15m markets
+                    params = {"series_ticker": series, "status": "active", "limit": 50}
                     
                     try:
                         async with session.get(url, params=params) as resp:
@@ -147,12 +147,12 @@ class Fast15mPaperTrader:
                 logger.info(f"  {m['ticker']}: bid={m['yes_bid']*100:.0f}c ask={m['yes_ask']*100:.0f}c")
             
             # Scan for opportunities
-            opportunities = await self.engine.scan_for_opportunities(markets)
+            opportunities = await self.engine.scan_for_opportunities(markets, prices)
             logger.info(f"Found {len(opportunities)} trading opportunities")
             
             if opportunities:
                 for opp in opportunities[:5]:
-                    logger.info(f"  {opp.mode.value.upper()} {opp.side.value.upper()} {opp.ticker}: "
+                    logger.info(f"  {opp.mode.upper()} {opp.side.upper()} {opp.ticker}: "
                                f"Fair {opp.fair_value*100:.1f}%, Edge {opp.edge}c, Qty {opp.quantity}")
                 
                 # Execute trades
@@ -164,13 +164,13 @@ class Fast15mPaperTrader:
                     order = self.engine.execute_paper_trade(opp)
                     if order:
                         trades_executed += 1
-                        logger.info(f"PAPER TRADE: {order.order_id} - {order.mode.value.upper()} {order.side.value.upper()} "
+                        logger.info(f"PAPER TRADE: {order.order_id} - {order.mode.upper()} {order.side.upper()} "
                                    f"{order.quantity}x {order.ticker} @ {order.price}c")
                 
                 logger.info(f"Executed {trades_executed} trades this cycle")
             
             # Portfolio status
-            status = self.engine.get_status()
+            status = self.engine.get_portfolio_status()
             logger.info(f"\n15M PORTFOLIO STATUS:")
             logger.info(f"  Cash: ${status['cash']:.2f}")
             logger.info(f"  Positions: {status['positions_count']}")

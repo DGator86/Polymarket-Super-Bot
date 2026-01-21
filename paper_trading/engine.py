@@ -17,7 +17,7 @@ import json
 import logging
 import uuid
 from datetime import datetime, timezone, timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_CEILING
 from typing import Optional, List, Dict, Any, Callable, Awaitable
 from dataclasses import dataclass, field, asdict
 from enum import Enum
@@ -68,6 +68,16 @@ class PaperPosition:
     signal_edge: Decimal = Decimal("0")
     signal_confidence: Decimal = Decimal("0")
     model_probability: Decimal = Decimal("0")
+    
+    # Execution/ledger metadata
+    entry_fee: Decimal = Decimal("0.00")
+    slippage_applied: Decimal = Decimal("0.00")
+    yes_bid_entry: Optional[Decimal] = None
+    yes_ask_entry: Optional[Decimal] = None
+    no_bid_entry: Optional[Decimal] = None
+    no_ask_entry: Optional[Decimal] = None
+    spread_entry: Optional[Decimal] = None
+    fill_status: str = "filled"
     
     @property
     def unrealized_pnl(self) -> Decimal:
@@ -158,6 +168,16 @@ class PaperTrade:
     category: MarketCategory
     time_held_hours: float
     
+    # Execution/ledger
+    yes_bid_entry: Optional[Decimal] = None
+    yes_ask_entry: Optional[Decimal] = None
+    no_bid_entry: Optional[Decimal] = None
+    no_ask_entry: Optional[Decimal] = None
+    spread_entry: Optional[Decimal] = None
+    slippage_applied: Optional[Decimal] = None
+    fee_paid: Optional[Decimal] = None
+    fill_status: str = "filled"
+    
     def to_dict(self) -> Dict:
         return {
             "trade_id": self.trade_id,
@@ -236,13 +256,25 @@ class PaperTradingEngine:
         self,
         starting_capital: Decimal = Decimal("1000"),
         data_dir: str = "./paper_trading_data",
-        slippage_pct: Decimal = Decimal("0.005"),  # 0.5% slippage simulation
-        fee_pct: Decimal = Decimal("0.01"),         # 1% fee assumption
+        # Deprecated: kept for backward compatibility (not used by new model)
+        slippage_pct: Decimal = Decimal("0.005"),
+        fee_pct: Decimal = Decimal("0.01"),
+        # New execution realism params (defaults per spec)
+        slip_floor_cents: Decimal = Decimal("0.01"),
+        slippage_k: Decimal = Decimal("0.40"),
+        no_fill_spread_threshold: Decimal = Decimal("0.08"),
+        min_top_size: int = 10,
+        use_true_no_book: bool = True,
     ):
         self.starting_capital = starting_capital
         self.data_dir = Path(data_dir)
         self.slippage_pct = slippage_pct
         self.fee_pct = fee_pct
+        self.slip_floor_cents = slip_floor_cents
+        self.slippage_k = slippage_k
+        self.no_fill_spread_threshold = no_fill_spread_threshold
+        self.min_top_size = min_top_size
+        self.use_true_no_book = use_true_no_book
         
         # Portfolio state
         self.cash = starting_capital
@@ -305,6 +337,15 @@ class PaperTradingEngine:
                 signal_edge TEXT,
                 signal_confidence TEXT,
                 model_probability TEXT,
+                -- New columns for execution metadata
+                entry_fee TEXT,
+                slippage_applied TEXT,
+                yes_bid_entry TEXT,
+                yes_ask_entry TEXT,
+                no_bid_entry TEXT,
+                no_ask_entry TEXT,
+                spread_entry TEXT,
+                fill_status TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
             
@@ -327,6 +368,15 @@ class PaperTradingEngine:
                 market_probability TEXT,
                 category TEXT,
                 time_held_hours REAL,
+                -- Execution metadata
+                yes_bid_entry TEXT,
+                yes_ask_entry TEXT,
+                no_bid_entry TEXT,
+                no_ask_entry TEXT,
+                spread_entry TEXT,
+                slippage_applied TEXT,
+                fee_paid TEXT,
+                fill_status TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
             
@@ -348,6 +398,47 @@ class PaperTradingEngine:
             CREATE INDEX IF NOT EXISTS idx_trades_outcome ON trades(outcome);
             CREATE INDEX IF NOT EXISTS idx_trades_category ON trades(category);
         """)
+        
+        # Backwards-compatible: add missing columns if database existed
+        try:
+            cur = self._db.execute("PRAGMA table_info(trades)")
+            cols = {row[1] for row in cur.fetchall()}
+            add_cols = []
+            if "yes_bid_entry" not in cols:
+                add_cols.append("ALTER TABLE trades ADD COLUMN yes_bid_entry TEXT")
+            if "yes_ask_entry" not in cols:
+                add_cols.append("ALTER TABLE trades ADD COLUMN yes_ask_entry TEXT")
+            if "no_bid_entry" not in cols:
+                add_cols.append("ALTER TABLE trades ADD COLUMN no_bid_entry TEXT")
+            if "no_ask_entry" not in cols:
+                add_cols.append("ALTER TABLE trades ADD COLUMN no_ask_entry TEXT")
+            if "spread_entry" not in cols:
+                add_cols.append("ALTER TABLE trades ADD COLUMN spread_entry TEXT")
+            if "slippage_applied" not in cols:
+                add_cols.append("ALTER TABLE trades ADD COLUMN slippage_applied TEXT")
+            if "fee_paid" not in cols:
+                add_cols.append("ALTER TABLE trades ADD COLUMN fee_paid TEXT")
+            if "fill_status" not in cols:
+                add_cols.append("ALTER TABLE trades ADD COLUMN fill_status TEXT")
+            for stmt in add_cols:
+                self._db.execute(stmt)
+        except Exception:
+            pass
+        
+        try:
+            cur = self._db.execute("PRAGMA table_info(positions)")
+            cols = {row[1] for row in cur.fetchall()}
+            add_cols = []
+            for name in [
+                "entry_fee","slippage_applied","yes_bid_entry","yes_ask_entry",
+                "no_bid_entry","no_ask_entry","spread_entry","fill_status"
+            ]:
+                if name not in cols:
+                    add_cols.append(f"ALTER TABLE positions ADD COLUMN {name} TEXT")
+            for stmt in add_cols:
+                self._db.execute(stmt)
+        except Exception:
+            pass
         
         self._db.commit()
     
@@ -406,35 +497,112 @@ class PaperTradingEngine:
         use_slippage: bool = True
     ) -> Optional[PaperPosition]:
         """
-        Enter a new paper position.
-        
-        Args:
-            signal: Trading signal with edge/confidence info
-            market: Current market data
-            size: Number of contracts
-            use_slippage: Simulate slippage on entry
-        
-        Returns:
-            PaperPosition if successful, None if insufficient funds
+        Enter a new paper position with venue-realistic execution.
+        - Execute at top-of-book bid/ask
+        - Spread-aware slippage (Δ = max(1c, k * spread)) applied against us
+        - No-fill when spread >= threshold or top size < min_top_size
+        - Partial fills allowed up to top size; remainder cancels
+        - Taker fee charged on entry per official formula
         """
-        # Calculate entry price with slippage
+        # Fetch latest orderbook for realistic bid/ask and sizes
+        yes_bid = market.best_bid
+        yes_ask = market.best_ask
+        no_bid = None
+        no_ask = None
+        yes_bid_size = market.bid_size
+        yes_ask_size = market.ask_size
+        no_bid_size = None
+        no_ask_size = None
+        
+        if self._kalshi:
+            try:
+                ob = await self._kalshi.get_orderbook(market.ticker, depth=1)
+                ob_yes = ob.get("orderbook", {}).get("yes", {})
+                ob_no = ob.get("orderbook", {}).get("no", {})
+                yb = ob_yes.get("bids", [])
+                ya = ob_yes.get("asks", [])
+                nb = ob_no.get("bids", [])
+                na = ob_no.get("asks", [])
+                if yb:
+                    yes_bid = Decimal(str(yb[0][0])) / 100
+                    yes_bid_size = int(yb[0][1])
+                if ya:
+                    yes_ask = Decimal(str(ya[0][0])) / 100
+                    yes_ask_size = int(ya[0][1])
+                if self.use_true_no_book and nb:
+                    no_bid = Decimal(str(nb[0][0])) / 100
+                    no_bid_size = int(nb[0][1])
+                if self.use_true_no_book and na:
+                    no_ask = Decimal(str(na[0][0])) / 100
+                    no_ask_size = int(na[0][1])
+            except Exception as e:
+                logger.debug(f"Failed to fetch orderbook for {market.ticker}: {e}")
+        
+        # Fallback NO side from complement when not available
+        if no_bid is None:
+            no_bid = Decimal("1") - yes_ask
+            no_bid_size = yes_ask_size
+        if no_ask is None:
+            no_ask = Decimal("1") - yes_bid
+            no_ask_size = yes_bid_size
+        
+        # Choose side-specific quotes and spread
         if signal.side == Side.YES:
-            base_price = market.best_ask
-            if use_slippage:
-                entry_price = base_price * (Decimal("1") + self.slippage_pct)
+            side_bid = yes_bid
+            side_ask = yes_ask
+            top_size = yes_ask_size
         else:
-            base_price = Decimal("1") - market.best_bid
-            if use_slippage:
-                entry_price = base_price * (Decimal("1") + self.slippage_pct)
+            side_bid = no_bid
+            side_ask = no_ask
+            top_size = no_ask_size if no_ask_size is not None else yes_bid_size
         
-        entry_price = min(Decimal("0.99"), max(Decimal("0.01"), entry_price))
+        spread = side_ask - side_bid
         
-        # Calculate cost
-        cost = entry_price * size
+        # No-fill rules
+        if spread >= self.no_fill_spread_threshold or (top_size is not None and top_size < self.min_top_size):
+            logger.info(
+                f"NO FILL: {market.ticker} side={signal.side.value} spread={spread:.2%} top_size={top_size}"
+            )
+            return None
         
-        # Check funds
+        # Partial fill: respect top size
+        fill_qty = min(size, top_size if top_size is not None else size)
+        if fill_qty <= 0:
+            logger.info(f"NO FILL: {market.ticker} zero available size")
+            return None
+        
+        # Spread-aware slippage
+        delta = max(self.slip_floor_cents, self.slippage_k * spread)
+        if signal.side == Side.YES:
+            entry_price = min(Decimal("0.99"), side_ask + delta)
+        else:
+            entry_price = min(Decimal("0.99"), side_ask + delta)
+        entry_price = max(Decimal("0.01"), entry_price)
+        
+        # Ensure funds: shrink to affordable size if needed
+        affordable_qty = int(self.cash // entry_price) if entry_price > 0 else 0
+        if affordable_qty < 1:
+            logger.warning(f"Insufficient funds for any fill at {entry_price:.2%}")
+            return None
+        if fill_qty > affordable_qty:
+            fill_qty = affordable_qty
+            fill_status = "partial"
+        else:
+            fill_status = "filled" if fill_qty == size else "partial"
+        
+        # Taker fee (entry only; no settlement fee)
+        def _taker_fee(count: int, price: Decimal) -> Decimal:
+            base = (Decimal("0.07") * Decimal(count) * price * (Decimal("1") - price))
+            # ceil to nearest $0.01
+            cents = (base * 100).to_integral_value(rounding=ROUND_CEILING)
+            return cents / 100
+        entry_fee = _taker_fee(fill_qty, entry_price)
+        
+        # Cash checks and deductions
+        cost = entry_price * fill_qty + entry_fee
         if cost > self.cash:
-            logger.warning(f"Insufficient funds: need ${cost:.2f}, have ${self.cash:.2f}")
+            # Should not happen after affordable check, but guard
+            logger.warning(f"Insufficient funds after fees: need ${cost:.2f}, have ${self.cash:.2f}")
             return None
         
         # Create position
@@ -442,7 +610,7 @@ class PaperTradingEngine:
             position_id=str(uuid.uuid4()),
             ticker=market.ticker,
             side=signal.side,
-            quantity=size,
+            quantity=fill_qty,
             entry_price=entry_price,
             entry_time=datetime.now(timezone.utc),
             market_question=market.question,
@@ -452,9 +620,17 @@ class PaperTradingEngine:
             signal_edge=signal.edge,
             signal_confidence=signal.confidence,
             model_probability=signal.model_probability,
+            entry_fee=entry_fee,
+            slippage_applied=delta,
+            yes_bid_entry=yes_bid,
+            yes_ask_entry=yes_ask,
+            no_bid_entry=no_bid,
+            no_ask_entry=no_ask,
+            spread_entry=spread,
+            fill_status=fill_status,
         )
         
-        # Deduct cash
+        # Deduct cash (include fee)
         self.cash -= cost
         
         # Store position
@@ -464,7 +640,7 @@ class PaperTradingEngine:
         logger.info(
             f"PAPER ENTRY: {position.ticker} {position.side.value.upper()} "
             f"x{position.quantity} @ {position.entry_price:.2%} "
-            f"(cost: ${cost:.2f})"
+            f"(cost+fee: ${cost:.2f}, fee=${entry_fee:.2f}, spread={spread:.2%}, Δ={delta:.2%})"
         )
         
         return position
@@ -541,7 +717,8 @@ class PaperTradingEngine:
     
     async def _finalize_position(self, position: PaperPosition):
         """Finalize a settled position and record trade"""
-        pnl = position.realized_pnl
+        # Net P&L after fees (entry only; no settlement fee)
+        pnl = position.realized_pnl - position.entry_fee
         
         # Return settlement value to cash
         if position.side == Side.YES:
@@ -576,6 +753,14 @@ class PaperTradingEngine:
             market_probability=position.entry_price,
             category=position.category,
             time_held_hours=time_held,
+            yes_bid_entry=position.yes_bid_entry,
+            yes_ask_entry=position.yes_ask_entry,
+            no_bid_entry=position.no_bid_entry,
+            no_ask_entry=position.no_ask_entry,
+            spread_entry=position.spread_entry,
+            slippage_applied=position.slippage_applied,
+            fee_paid=position.entry_fee,
+            fill_status=position.fill_status,
         )
         
         self.trades.append(trade)
@@ -635,8 +820,10 @@ class PaperTradingEngine:
             (trade_id, position_id, ticker, side, quantity, entry_price,
              entry_time, exit_price, exit_time, pnl, pnl_pct, outcome,
              signal_edge, signal_confidence, model_probability,
-             market_probability, category, time_held_hours)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             market_probability, category, time_held_hours,
+             yes_bid_entry, yes_ask_entry, no_bid_entry, no_ask_entry,
+             spread_entry, slippage_applied, fee_paid, fill_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             trade.trade_id, trade.position_id, trade.ticker, trade.side.value,
             trade.quantity, str(trade.entry_price), trade.entry_time.isoformat(),
@@ -644,7 +831,15 @@ class PaperTradingEngine:
             str(trade.pnl), str(trade.pnl_pct), trade.outcome.value,
             str(trade.signal_edge), str(trade.signal_confidence),
             str(trade.model_probability), str(trade.market_probability),
-            trade.category.value, trade.time_held_hours
+            trade.category.value, trade.time_held_hours,
+            str(trade.yes_bid_entry) if trade.yes_bid_entry is not None else None,
+            str(trade.yes_ask_entry) if trade.yes_ask_entry is not None else None,
+            str(trade.no_bid_entry) if trade.no_bid_entry is not None else None,
+            str(trade.no_ask_entry) if trade.no_ask_entry is not None else None,
+            str(trade.spread_entry) if trade.spread_entry is not None else None,
+            str(trade.slippage_applied) if trade.slippage_applied is not None else None,
+            str(trade.fee_paid) if trade.fee_paid is not None else None,
+            trade.fill_status
         ))
         self._db.commit()
     
