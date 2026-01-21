@@ -134,7 +134,7 @@ class Fast15mPaperTrader:
         
         try:
             # Get crypto prices
-            prices = await self.crypto_agg.get_prices_for_all_coins()
+            prices = await self.crypto_agg.get_all_prices()
             btc_price = prices.get("BTC")
             eth_price = prices.get("ETH")
             sol_price = prices.get("SOL")

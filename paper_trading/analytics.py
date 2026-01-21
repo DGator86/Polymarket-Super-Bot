@@ -147,6 +147,94 @@ class AnalyticsEngine:
             edge_calibration=calibration,
         )
     
+    def summarize_trade_execution(self, days: int = 30) -> Dict[str, Any]:
+        """Aggregate execution/EV audit metrics for the last N days."""
+        if not self._db:
+            self.connect()
+        if not self._db:
+            return {}
+        end_date = datetime.now(timezone.utc)
+        start_date = end_date - timedelta(days=days)
+        cur = self._db.execute(
+            """
+            SELECT side, quantity, entry_price, model_probability, 
+                   yes_bid_entry, yes_ask_entry, no_bid_entry, no_ask_entry,
+                   spread_entry, slippage_applied, fee_paid
+            FROM trades
+            WHERE exit_time >= ?
+            ORDER BY exit_time
+            """,
+            (start_date.isoformat(),)
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        if not rows:
+            return {}
+        import statistics as stats
+        n = len(rows)
+        # Helper accessors with None handling
+        def f(x):
+            try:
+                return float(x)
+            except Exception:
+                return None
+        p_cals = []
+        q_entries = []
+        p_minus_q_net = []
+        pnl_like = []
+        yes_asks = []
+        yes_bids = []
+        no_asks = []
+        no_bids = []
+        spreads = []
+        slip_applied = []
+        spread_gt_slip = 0
+        for r in rows:
+            side = r["side"].lower()
+            qty = int(r.get("quantity") or 0) or 1
+            entry = f(r.get("entry_price")) or 0.0
+            model_p_yes = f(r.get("model_probability")) or 0.0
+            if side == "yes":
+                p_cal = model_p_yes
+                ask = f(r.get("yes_ask_entry"))
+                bid = f(r.get("yes_bid_entry"))
+                if ask is not None: yes_asks.append(ask)
+                if bid is not None: yes_bids.append(bid)
+            else:
+                p_cal = 1.0 - model_p_yes
+                ask = f(r.get("no_ask_entry"))
+                bid = f(r.get("no_bid_entry"))
+                if ask is not None: no_asks.append(ask)
+                if bid is not None: no_bids.append(bid)
+            p_cals.append(p_cal)
+            q_entries.append(entry)
+            fee = f(r.get("fee_paid")) or 0.0
+            fee_per_contract = fee / qty if qty > 0 else 0.0
+            p_minus_q_net.append(p_cal - entry - fee_per_contract)
+            sp = f(r.get("spread_entry"))
+            da = f(r.get("slippage_applied"))
+            if sp is not None: spreads.append(sp)
+            if da is not None: slip_applied.append(da)
+            if sp is not None and da is not None and sp > da:
+                spread_gt_slip += 1
+        def safe_avg(arr):
+            return (sum(arr) / len(arr)) if arr else 0.0
+        def safe_med(arr):
+            return stats.median(arr) if arr else 0.0
+        return {
+            "n_trades": n,
+            "avg_p_cal": safe_avg(p_cals),
+            "avg_yes_ask": safe_avg(yes_asks),
+            "avg_yes_bid": safe_avg(yes_bids),
+            "avg_no_ask": safe_avg(no_asks),
+            "avg_no_bid": safe_avg(no_bids),
+            "avg_q_entry": safe_avg(q_entries),
+            "avg_p_minus_q_net": safe_avg(p_minus_q_net),
+            "p_minus_q_net_min": min(p_minus_q_net) if p_minus_q_net else 0.0,
+            "p_minus_q_net_med": safe_med(p_minus_q_net),
+            "p_minus_q_net_max": max(p_minus_q_net) if p_minus_q_net else 0.0,
+            "spread_gt_slip_frac": (spread_gt_slip / len(rows)) if rows else 0.0,
+        }
+    
     def _empty_report(self) -> PerformanceReport:
         now = datetime.now(timezone.utc).isoformat()
         return PerformanceReport(
