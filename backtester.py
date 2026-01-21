@@ -14,6 +14,21 @@ from typing import List, Dict, Optional, Tuple
 import numpy as np
 from collections import defaultdict
 from scipy.stats import norm
+import math
+
+# ===== Kalshi fee helpers (taker by default) =====
+
+def ceil_to_cent(x: float) -> float:
+    return math.ceil(x * 100.0) / 100.0
+
+def kalshi_trade_fee(price: float, contracts: int, is_maker: bool = False) -> float:
+    """
+    price: 0-1, contracts: integer count, is_maker: use maker rate when provably applicable
+    Conservative default: taker (is_maker=False)
+    """
+    rate = 0.0175 if is_maker else 0.07
+    fee = rate * contracts * price * (1.0 - price)
+    return ceil_to_cent(fee)
 
 @dataclass
 class HistoricalPrice:
@@ -244,6 +259,10 @@ class LatencyBacktester:
     def run_backtest(
         self,
         crypto_prices: List[HistoricalPrice],
+        jitter_seconds: int = 0,
+        spread_slip_k: float = 0.40,
+        slip_floor: float = 0.01,
+        hard_mode_margin: Optional[float] = None,
     ) -> BacktestResults:
         """
         Run backtest on historical data.
@@ -267,13 +286,23 @@ class LatencyBacktester:
             # Get current crypto price
             market_ts = int(market.timestamp.timestamp()) // 5 * 5
 
-            # Look for price slightly ahead (simulating our latency advantage)
+            # Compute model input price with optional time jitter (anti-lookahead)
             current_price = None
-            for offset in range(0, 15, 5):  # Check 0, 5, 10 seconds ahead
-                ts = market_ts + offset
-                if ts in price_by_time:
-                    current_price = price_by_time[ts]
-                    break
+            ts = market_ts + jitter_seconds
+            # Snap jittered ts to nearest 5s bucket
+            ts = int(ts // 5 * 5)
+            if ts in price_by_time:
+                current_price = price_by_time[ts]
+            else:
+                # Fallback: use market timestamp if jitter missing
+                if market_ts in price_by_time:
+                    current_price = price_by_time[market_ts]
+                else:
+                    # Try small neighborhood
+                    for offset in (5, 10, -5, -10):
+                        if (market_ts + offset) in price_by_time:
+                            current_price = price_by_time[market_ts + offset]
+                            break
 
             if current_price is None:
                 continue
@@ -292,15 +321,29 @@ class LatencyBacktester:
             if spread > self.max_spread:
                 continue
 
-            # Calculate edge for both sides
+            # Calculate edge for both sides (based on top-of-book)
             yes_edge = fair_prob - market.yes_ask
             no_edge = (1 - fair_prob) - (1 - market.yes_bid)
 
+            # Spread-aware slippage
+            spread = market.yes_ask - market.yes_bid
+            delta = max(slip_floor, spread_slip_k * spread)
+
+            # Optional hard-mode label: tighten settlement barrier (margin in price units)
+            effective_settlement = market.settlement
+            if hard_mode_margin is not None:
+                # We don't have spot here; approximate with strike price scale
+                # Treat margin as absolute price dollars; if strike is large, barrier effect is minor in prob units
+                # Since settlement is already 0/1 on close >= strike, we cannot re-evaluate without close price
+                # Keep placeholder: no change when not available
+                pass
+
             # Trade if edge exceeds threshold
             if yes_edge > self.min_edge:
-                entry_price = market.yes_ask * (1 + self.slippage)
-                exit_price = market.settlement
-                pnl = self.position_size * (exit_price - entry_price)
+                entry_price = min(0.99, market.yes_ask + delta)
+                exit_price = effective_settlement
+                fee = kalshi_trade_fee(float(entry_price), self.position_size, is_maker=False)
+                pnl = self.position_size * (exit_price - entry_price) - fee
 
                 trades.append(BacktestTrade(
                     entry_time=market.timestamp,
@@ -315,9 +358,11 @@ class LatencyBacktester:
                 equity_curve.append(equity_curve[-1] + pnl)
 
             elif no_edge > self.min_edge:
-                entry_price = (1 - market.yes_bid) * (1 + self.slippage)
-                exit_price = 1 - market.settlement
-                pnl = self.position_size * (exit_price - entry_price)
+                no_ask_approx = 1 - market.yes_bid
+                entry_price = min(0.99, no_ask_approx + delta)
+                exit_price = 1 - effective_settlement
+                fee = kalshi_trade_fee(float(entry_price), self.position_size, is_maker=False)
+                pnl = self.position_size * (exit_price - entry_price) - fee
 
                 trades.append(BacktestTrade(
                     entry_time=market.timestamp,
