@@ -279,12 +279,15 @@ def run_backtest(df: pd.DataFrame, name: str = "Simulation"):
     evaluator = Evaluator()
     trades = []
     
-    # Simulation Parameters
+    # Simulation Parameters (aligned with execution realism)
     lookahead_hours = 1
     confidence_threshold = 0.65
     min_edge = 0.05
-    fee_per_contract = 0.02
-    slippage_per_contract = 0.01  # Add 1 cent slippage
+    slip_floor = 0.01
+    slippage_k = 0.40
+    no_fill_spread_threshold = 0.08
+    min_top_size = 10
+    desired_size = 1  # contracts
     
     # Ensure dataframe has required columns
     if 'regime' not in df.columns:
@@ -302,7 +305,37 @@ def run_backtest(df: pd.DataFrame, name: str = "Simulation"):
          df['volatility'] = df['price'].pct_change().rolling(24).std() * sqrt(24*4*365)
          df['volatility'] = df['volatility'].fillna(0.5) # Default
     
+    # Helper: taker fee (ceil to cent)
+    def taker_fee(count: int, price: float) -> float:
+        import math
+        base = 0.07 * count * price * (1.0 - price)
+        return math.ceil(base * 100) / 100.0
+    
+    # Helper: simulate top-of-book spread and sizes
+    def simulate_quotes(market_q: float) -> dict:
+        # Spread sampled: mean 4c, std 1.5c, clipped [1c, 12c]
+        spread = float(np.clip(np.random.normal(0.04, 0.015), 0.01, 0.12))
+        yes_bid = max(0.01, market_q - spread/2)
+        yes_ask = min(0.99, market_q + spread/2)
+        # True NO book with mild asymmetry
+        no_bid = max(0.01, 1.0 - yes_ask - np.random.uniform(0.0, 0.01))
+        no_ask = min(0.99, 1.0 - yes_bid + np.random.uniform(0.0, 0.01))
+        yes_bid_size = np.random.randint(5, 30)
+        yes_ask_size = np.random.randint(5, 30)
+        no_bid_size = np.random.randint(5, 30)
+        no_ask_size = np.random.randint(5, 30)
+        return {
+            'spread_yes': yes_ask - yes_bid,
+            'yes_bid': yes_bid, 'yes_ask': yes_ask,
+            'no_bid': no_bid, 'no_ask': no_ask,
+            'yes_bid_size': yes_bid_size, 'yes_ask_size': yes_ask_size,
+            'no_bid_size': no_bid_size, 'no_ask_size': no_ask_size,
+        }
+    
     print(f"\nRunning backtest for: {name} ({len(df)} candles)...")
+    
+    # Counters for realism diagnostics
+    no_fill_count = 0
     
     # PURGED WALK-FORWARD LOGIC
     # We will simulate strict non-overlapping windows for decision vs outcome
@@ -318,57 +351,74 @@ def run_backtest(df: pd.DataFrame, name: str = "Simulation"):
         # For real data, 'volatility' is in the DF. For synthetic, it's there too.
         # We add some noise to simulate estimation error
         est_vol = current.volatility * np.random.normal(1, 0.2)
-        model_p = strategy.predict_proba(current.price, strike_price, lookahead_hours, est_vol)
+        model_p_yes = strategy.predict_proba(current.price, strike_price, lookahead_hours, est_vol)
         
         # 2. Market Price (Implied Probability)
         # Assume market is slightly efficient but noisy
-        true_p = strategy.predict_proba(current.price, strike_price, lookahead_hours, current.volatility)
+        true_p_yes = strategy.predict_proba(current.price, strike_price, lookahead_hours, current.volatility)
         market_sentiment = np.random.normal(0, 0.1)
-        market_q = np.clip(true_p + market_sentiment, 0.01, 0.99)
+        market_q_yes = float(np.clip(true_p_yes + market_sentiment, 0.01, 0.99))
+        quotes = simulate_quotes(market_q_yes)
         
-        # 3. Trading Logic with Slippage
-        # Conservative: assume we buy at market_q + slippage
-        buy_price_yes = min(market_q + slippage_per_contract, 0.99)
-        buy_price_no = min((1 - market_q) + slippage_per_contract, 0.99)
+        # 3. Execution realism: no-fill and slippage
+        if quotes['spread_yes'] >= no_fill_spread_threshold:
+            no_fill_count += 1
+            continue
+        # Choose side by EV vs realistic entry price
+        # YES entry: ask + Δ; NO entry: no_ask + Δ
+        delta_yes = max(slip_floor, slippage_k * quotes['spread_yes'])
+        yes_entry = min(0.99, quotes['yes_ask'] + delta_yes)
+        no_entry = min(0.99, quotes['no_ask'] + delta_yes)
         
-        ev_yes = model_p - buy_price_yes - fee_per_contract
-        ev_no = (1 - model_p) - buy_price_no - fee_per_contract
+        # Taker fee per your formula
+        fee_yes = taker_fee(desired_size, yes_entry)
+        fee_no = taker_fee(desired_size, no_entry)
+        
+        # Compute EV for sides
+        ev_yes = (model_p_yes - yes_entry) - fee_yes
+        model_p_no = 1.0 - model_p_yes
+        ev_no = (model_p_no - no_entry) - fee_no
         
         trade_side = None
-        if ev_yes > min_edge and model_p > confidence_threshold:
+        entry_price = None
+        fee_used = 0.0
+        if ev_yes > min_edge and model_p_yes > confidence_threshold and quotes['yes_ask_size'] >= min_top_size:
             trade_side = "YES"
-            entry_price = buy_price_yes
-        elif ev_no > min_edge and (1-model_p) > confidence_threshold:
+            entry_price = yes_entry
+            fee_used = fee_yes
+        elif ev_no > min_edge and model_p_no > confidence_threshold and quotes['no_ask_size'] >= min_top_size:
             trade_side = "NO"
-            entry_price = buy_price_no
+            entry_price = no_entry
+            fee_used = fee_no
+        else:
+            continue
             
-        if trade_side:
-            # 4. Outcome
-            outcome_bool = future.price > strike_price
+        # 4. Outcome and PnL (hold to expiry)
+        outcome_bool = future.price > strike_price
+        
+        if trade_side == "YES":
+            win = 1 if outcome_bool else 0
+            pnl = (1 - entry_price - fee_used) if win else (-entry_price - fee_used)
+            record_prob = model_p_yes
+            record_market = market_q_yes
+        else: # NO
+            win = 1 if not outcome_bool else 0
+            pnl = (1 - entry_price - fee_used) if win else (-entry_price - fee_used)
+            record_prob = 1 - model_p_yes
+            record_market = 1 - market_q_yes
             
-            if trade_side == "YES":
-                win = 1 if outcome_bool else 0
-                # PnL = (Payout - Entry - Fee)
-                pnl = (1 - entry_price - fee_per_contract) if win else (-entry_price - fee_per_contract)
-                record_prob = model_p
-                record_market = market_q
-            else: # NO
-                win = 1 if not outcome_bool else 0
-                pnl = (1 - entry_price - fee_per_contract) if win else (-entry_price - fee_per_contract)
-                record_prob = 1 - model_p
-                record_market = 1 - market_q
-                
-            trades.append(TradeRecord(
-                timestamp=current.timestamp,
-                regime=current.regime,
-                model_prob=record_prob,
-                market_prob=record_market,
-                outcome=win,
-                pnl=pnl,
-                fee=fee_per_contract
-            ))
-            
+        trades.append(TradeRecord(
+            timestamp=current.timestamp,
+            regime=current.regime,
+            model_prob=record_prob,
+            market_prob=record_market,
+            outcome=win,
+            pnl=pnl,
+            fee=fee_used
+        ))
+        
     evaluator.evaluate(trades)
+    print(f"No-fill opportunities (spread >= {no_fill_spread_threshold:.2f}): {no_fill_count}")
 
 def run_simulation():
     # Setup
