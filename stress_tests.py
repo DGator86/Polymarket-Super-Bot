@@ -280,7 +280,6 @@ if __name__ == "__main__":
     parser.add_argument("--days", type=int, default=180)
     parser.add_argument("--min-edge", type=float, default=MIN_EDGE, help="Minimum edge threshold (default 0.03)")
     args = parser.parse_args()
-    # Update global min edge for this run
-    global MIN_EDGE
+    # Update threshold from CLI
     MIN_EDGE = args.min_edge
     asyncio.run(main(days=args.days))
